@@ -1,0 +1,16 @@
+name: Daily Automation
+
+on:
+  schedule:
+    - cron: "0 9 * * *"   # هر روز ساعت 9 صبح UTC
+  workflow_dispatch:       # برای تست دستی
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send webhook
+        run: |
+          curl -X POST https://https://quiet-sky-bfba.mohamadsbrfit720li.workers.dev/
+          -H "Content-Type: application/json" \
+          -d '{"message":"Run daily task"}'
