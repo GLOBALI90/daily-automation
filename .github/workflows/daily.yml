@@ -11,6 +11,6 @@ jobs:
     steps:
       - name: Send webhook
         run: |
-          curl -X POST https://https://quiet-sky-bfba.mohamadsbrfit720li.workers.dev/
+          curl -X POST https://quiet-sky-bfba.mohamadsbrfit720li.workers.dev
           -H "Content-Type: application/json" \
           -d '{"message":"Run daily task"}'
