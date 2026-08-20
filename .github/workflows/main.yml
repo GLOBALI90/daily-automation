@@ -1,0 +1,16 @@
+name: Daily Automation
+
+on:
+  schedule:
+    - cron: "0 7 * * *"   # 9 صبح فرانکفورت (UTC+2)
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send webhook
+        run: |
+          curl -X POST https://quiet-sky-bfba.mohamadsbrfit720li.workers.dev/ \
+          -H "Content-Type: application/json" \
+          -d '{"topic":"github_daily","action":"run"}'
