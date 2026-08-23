@@ -13,14 +13,6 @@ DATA = ROOT / "data"
 DATA.mkdir(exist_ok=True)
 OUTPUT = DATA / "leads.csv"
 
-FALLBACK_QUERIES = [
-    '"procurement" "petrochemical" buyer company',
-    '"purchasing manager" chemicals importer company',
-    '"raw material" "petroleum products" importer company',
-    '"steel" "procurement" industrial company',
-    '"renewable energy" "procurement" company',
-]
-
 FIELDS = [
     "company_name", "website", "country", "industry", "buyer_type",
     "product_interest", "contact_person", "email", "whatsapp", "phone",
@@ -28,51 +20,66 @@ FIELDS = [
 ]
 
 HEADERS = {"User-Agent": "ROZHAN-Global-B2B-Research/1.0 (+https://www.rojanglobal.com)"}
-SOCIAL_DOMAINS = {"linkedin.com", "facebook.com", "x.com", "twitter.com", "instagram.com"}
+GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
+MODEL = os.getenv("GEMINI_SEARCH_MODEL", "gemini-2.5-flash-lite")
 
-
-def gemini_queries():
-    key = os.getenv("GEMINI_API_KEY")
-    model = os.getenv("GEMINI_MODEL", "")
-    base = os.getenv("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta/openai")
-    if not key or not model:
-        return FALLBACK_QUERIES
-    prompt = f"""You are the search planner for {COMPANY['brand']}.
+PROMPT = f"""
+You are the web research assistant for {COMPANY['brand']} ({COMPANY['legal_name']}).
 Business sectors: petroleum products, chemicals, petrochemicals, steel, renewable energy.
 Target customers: direct buyers, industrial consumers, raw-material consumers, importers and procurement companies.
-Create exactly 5 concise web-search queries to find potential B2B buyer companies and public business contact pages.
-Prefer queries using procurement, purchasing, importer, buyer, industrial consumer, product names and country-neutral wording.
-Return only a JSON array of 5 strings."""
+
+Use Google Search grounding to find exactly 10 distinct potential B2B buyer companies anywhere in the world.
+Prefer real operating companies that appear to purchase, import, consume or procure products in our sectors.
+Do not restrict yourself to social networks. Use company websites and public business pages when available.
+Do not invent contact details.
+
+Return ONLY a JSON array with exactly 10 objects, using these keys:
+company_name, website, country, industry, buyer_type, product_interest, contact_person, email, whatsapp, phone, linkedin, source, evidence
+
+Rules:
+- website must be a public company or relevant business webpage when available.
+- email, whatsapp, phone and contact_person must be publicly stated facts or empty strings.
+- linkedin may contain a public LinkedIn company/profile URL or empty string.
+- evidence should briefly explain why the company appears relevant and should reflect information found in search results.
+- Do not fabricate prices, volumes, names or contact information.
+""".strip()
+
+
+def gemini_search():
+    key = os.getenv("GEMINI_API_KEY")
+    if not key:
+        print("GEMINI_API_KEY is missing")
+        return []
+
+    url = f"{GEMINI_BASE}/models/{MODEL}:generateContent"
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": PROMPT}]}],
+        "tools": [{"google_search": {}}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+        },
+    }
     try:
         r = requests.post(
-            base.rstrip("/") + "/chat/completions",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"model": model, "temperature": 0.2, "messages": [{"role": "user", "content": prompt}]},
-            timeout=45,
+            url,
+            headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+            json=payload,
+            timeout=120,
         )
         r.raise_for_status()
-        text = r.json()["choices"][0]["message"]["content"].strip()
-        text = text[text.find("["):text.rfind("]") + 1]
-        queries = json.loads(text)
-        if isinstance(queries, list) and all(isinstance(q, str) for q in queries):
-            return queries[:5]
+        data = r.json()
+        text = data["candidates"][0]["content"]["parts"][0].get("text", "")
+        if not text:
+            return []
+        start, end = text.find("["), text.rfind("]")
+        if start == -1 or end == -1:
+            return []
+        rows = json.loads(text[start:end + 1])
+        return rows if isinstance(rows, list) else []
     except Exception as exc:
-        print(f"Gemini query planning failed: {exc}")
-    return FALLBACK_QUERIES
-
-
-def searx_search(query, num=10):
-    base = os.getenv("SEARXNG_URL", "").rstrip("/")
-    if not base:
+        print(f"Gemini Google Search failed: {exc}")
         return []
-    r = requests.get(
-        base + "/search",
-        params={"q": query, "format": "json", "categories": "general", "language": "en", "pageno": 1},
-        headers=HEADERS,
-        timeout=60,
-    )
-    r.raise_for_status()
-    return r.json().get("results", [])[:num]
 
 
 def domain(url):
@@ -82,24 +89,9 @@ def domain(url):
         return ""
 
 
-def infer_product(text):
-    t = text.lower()
-    for word, product in [
-        ("petrochemical", "Petrochemicals"),
-        ("chemical", "Chemicals"),
-        ("petroleum", "Petroleum products"),
-        ("steel", "Steel"),
-        ("renewable", "Renewable energy"),
-    ]:
-        if word in t:
-            return product
-    return ""
-
-
 def extract_contacts(url):
     result = {"email": "", "whatsapp": "", "phone": ""}
-    d = domain(url)
-    if not url or d in SOCIAL_DOMAINS:
+    if not url:
         return result
     try:
         r = requests.get(url, headers=HEADERS, timeout=20, allow_redirects=True)
@@ -147,38 +139,40 @@ def extract_contacts(url):
 
 
 def collect():
+    candidates = gemini_search()[:10]
     rows = []
     seen = set()
-    for q in gemini_queries():
-        results = searx_search(q, num=10)
-        for item in results:
-            link = item.get("url", "")
-            d = domain(link)
-            if not d or d in seen:
-                continue
-            seen.add(d)
-            title = item.get("title", "")
-            snippet = item.get("content", "")
-            text = f"{title} {snippet}"
-            contacts = extract_contacts(link)
-            rows.append({
-                "company_name": title[:200],
-                "website": link,
-                "country": "",
-                "industry": infer_product(text),
-                "buyer_type": "Potential buyer / industrial consumer",
-                "product_interest": infer_product(text),
-                "contact_person": "",
-                "email": contacts["email"],
-                "whatsapp": contacts["whatsapp"],
-                "phone": contacts["phone"],
-                "linkedin": link if "linkedin.com" in link else "",
-                "source": "SearXNG",
-                "evidence": snippet[:500],
-                "lead_score": "1" if contacts["email"] or contacts["phone"] or contacts["whatsapp"] else "0"
-            })
-            if len(rows) >= 10:
-                return rows
+
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        website = str(item.get("website", "")).strip()
+        key = domain(website) or str(item.get("company_name", "")).strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+
+        contacts = extract_contacts(website)
+        row = {
+            "company_name": str(item.get("company_name", "")).strip()[:200],
+            "website": website,
+            "country": str(item.get("country", "")).strip(),
+            "industry": str(item.get("industry", "")).strip(),
+            "buyer_type": str(item.get("buyer_type", "Potential buyer / industrial consumer")).strip(),
+            "product_interest": str(item.get("product_interest", "")).strip(),
+            "contact_person": str(item.get("contact_person", "")).strip(),
+            "email": str(item.get("email", "")).strip() or contacts["email"],
+            "whatsapp": str(item.get("whatsapp", "")).strip() or contacts["whatsapp"],
+            "phone": str(item.get("phone", "")).strip() or contacts["phone"],
+            "linkedin": str(item.get("linkedin", "")).strip(),
+            "source": "Gemini + Google Search grounding",
+            "evidence": str(item.get("evidence", "")).strip()[:500],
+            "lead_score": "1" if (item.get("email") or item.get("phone") or item.get("whatsapp") or contacts["email"] or contacts["phone"] or contacts["whatsapp"]) else "0",
+        }
+        if row["company_name"]:
+            rows.append(row)
+        if len(rows) >= 10:
+            break
     return rows
 
 
