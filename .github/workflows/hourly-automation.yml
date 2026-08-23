@@ -24,9 +24,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Collect leads with SearXNG
+      - name: Collect leads with SearXNG + You.com backup
         env:
           SEARXNG_URL: ${{ secrets.SEARXNG_URL }}
+          YDC_API_KEY: ${{ secrets.YDC_API_KEY }}
         run: python src/lead_collector.py
 
       - name: Generate AI outreach and send Gmail
