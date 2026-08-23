@@ -1,4 +1,4 @@
-FROM docker.io/searxng/searxng:latest
+FROM docker.io/searxng/searxng:2026.8.20-8d3dd0cd4
 
 COPY searxng/settings.yml /etc/searxng/settings.yml
 
@@ -7,6 +7,12 @@ ENV SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml \
     SEARXNG_PORT=10000 \
     SEARXNG_LIMITER=false \
     SEARXNG_PUBLIC_INSTANCE=false \
-    SEARXNG_IMAGE_PROXY=false
+    SEARXNG_IMAGE_PROXY=false \
+    GRANIAN_INTERFACE=wsgi \
+    GRANIAN_HOST=0.0.0.0 \
+    GRANIAN_PORT=10000 \
+    GRANIAN_WEBSOCKETS=false
 
 EXPOSE 10000
+
+CMD ["granian", "--interface", "wsgi", "--host", "0.0.0.0", "--port", "10000", "searx.webapp:app"]
