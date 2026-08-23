@@ -13,17 +13,12 @@ DATA = ROOT / "data"
 DATA.mkdir(exist_ok=True)
 OUTPUT = DATA / "leads.csv"
 
-QUERIES = [
+FALLBACK_QUERIES = [
     '"procurement" "petrochemical" buyer company',
     '"purchasing manager" chemicals importer company',
     '"raw material" "petroleum products" importer company',
     '"steel" "procurement" industrial company',
     '"renewable energy" "procurement" company',
-    '"petrochemical" manufacturer procurement',
-    '"chemical" manufacturer purchasing',
-    '"industrial consumer" petroleum products',
-    '"importer" "petroleum products" company',
-    '"importer" chemicals industrial company',
 ]
 
 FIELDS = [
@@ -36,19 +31,48 @@ HEADERS = {"User-Agent": "ROZHAN-Global-B2B-Research/1.0 (+https://www.rojanglob
 SOCIAL_DOMAINS = {"linkedin.com", "facebook.com", "x.com", "twitter.com", "instagram.com"}
 
 
-def google_search(query, num=10):
-    key = os.getenv("GOOGLE_CSE_API_KEY")
-    cx = os.getenv("GOOGLE_CSE_ID")
-    if not key or not cx:
+def gemini_queries():
+    key = os.getenv("GEMINI_API_KEY")
+    model = os.getenv("GEMINI_MODEL", "")
+    base = os.getenv("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta/openai")
+    if not key or not model:
+        return FALLBACK_QUERIES
+    prompt = f"""You are the search planner for {COMPANY['brand']}.
+Business sectors: petroleum products, chemicals, petrochemicals, steel, renewable energy.
+Target customers: direct buyers, industrial consumers, raw-material consumers, importers and procurement companies.
+Create exactly 5 concise web-search queries to find potential B2B buyer companies and public business contact pages.
+Prefer queries using procurement, purchasing, importer, buyer, industrial consumer, product names and country-neutral wording.
+Return only a JSON array of 5 strings."""
+    try:
+        r = requests.post(
+            base.rstrip("/") + "/chat/completions",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={"model": model, "temperature": 0.2, "messages": [{"role": "user", "content": prompt}]},
+            timeout=45,
+        )
+        r.raise_for_status()
+        text = r.json()["choices"][0]["message"]["content"].strip()
+        text = text[text.find("["):text.rfind("]") + 1]
+        queries = json.loads(text)
+        if isinstance(queries, list) and all(isinstance(q, str) for q in queries):
+            return queries[:5]
+    except Exception as exc:
+        print(f"Gemini query planning failed: {exc}")
+    return FALLBACK_QUERIES
+
+
+def searx_search(query, num=10):
+    base = os.getenv("SEARXNG_URL", "").rstrip("/")
+    if not base:
         return []
     r = requests.get(
-        "https://www.googleapis.com/customsearch/v1",
-        params={"key": key, "cx": cx, "q": query, "num": min(num, 10)},
+        base + "/search",
+        params={"q": query, "format": "json", "categories": "general", "language": "en", "pageno": 1},
         headers=HEADERS,
-        timeout=30,
+        timeout=60,
     )
     r.raise_for_status()
-    return r.json().get("items", [])
+    return r.json().get("results", [])[:num]
 
 
 def domain(url):
@@ -100,7 +124,6 @@ def extract_contacts(url):
     if phones:
         result["phone"] = re.sub(r"\s+", " ", phones[0]).strip()
 
-    # Check a likely contact page when the homepage contains no email.
     if not result["email"]:
         for path in ("/contact", "/contact-us", "/contacts"):
             try:
@@ -126,22 +149,21 @@ def extract_contacts(url):
 def collect():
     rows = []
     seen = set()
-    for q in QUERIES:
-        results = google_search(q, num=10)
+    for q in gemini_queries():
+        results = searx_search(q, num=10)
         for item in results:
-            link = item.get("link", "")
+            link = item.get("url", "")
             d = domain(link)
             if not d or d in seen:
                 continue
             seen.add(d)
-            text = f"{item.get('title','')} {item.get('snippet','')}"
+            title = item.get("title", "")
+            snippet = item.get("content", "")
+            text = f"{title} {snippet}"
             contacts = extract_contacts(link)
-            website = link
-            if d == "linkedin.com":
-                website = item.get("pagemap", {}).get("metatags", [{}])[0].get("og:url", link)
             rows.append({
-                "company_name": item.get("title", "").split(" | ")[0][:200],
-                "website": website,
+                "company_name": title[:200],
+                "website": link,
                 "country": "",
                 "industry": infer_product(text),
                 "buyer_type": "Potential buyer / industrial consumer",
@@ -151,8 +173,8 @@ def collect():
                 "whatsapp": contacts["whatsapp"],
                 "phone": contacts["phone"],
                 "linkedin": link if "linkedin.com" in link else "",
-                "source": "Google Custom Search",
-                "evidence": item.get("snippet", "")[:500],
+                "source": "SearXNG",
+                "evidence": snippet[:500],
                 "lead_score": "1" if contacts["email"] or contacts["phone"] or contacts["whatsapp"] else "0"
             })
             if len(rows) >= 10:
