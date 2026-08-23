@@ -1,6 +1,7 @@
 import csv
 import json
 import os
+import re
 import smtplib
 from email.message import EmailMessage
 from pathlib import Path
@@ -15,8 +16,7 @@ OUTREACH = ROOT / "data/outreach.csv"
 
 def llm(prompt):
     providers = [
-        ("GROQ_API_KEY", os.getenv("GROQ_API_BASE", "https://api.groq.com/openai/v1"), os.getenv("GROQ_MODEL", "")),
-        ("GEMINI_API_KEY", os.getenv("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta/openai"), os.getenv("GEMINI_MODEL", "")),
+        ("GEMINI_API_KEY", os.getenv("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta/openai"), os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")),
         ("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_BASE", "https://openrouter.ai/api/v1"), os.getenv("OPENROUTER_MODEL", "")),
     ]
     for secret, base, model in providers:
@@ -45,6 +45,7 @@ WhatsApp: {COMPANY['whatsapp']}
 Create one concise professional B2B introduction email for this potential buyer.
 Use only the facts supplied below. Do not invent products, volumes, names, prices or contact details.
 Company: {row.get('company_name','')}
+Country: {row.get('country','')}
 Industry: {row.get('industry','')}
 Potential product interest: {row.get('product_interest','')}
 Evidence: {row.get('evidence','')}
@@ -56,11 +57,12 @@ Return only: SUBJECT: ... then the email body.
 def send_email(to, content):
     if os.getenv("SEND_EMAILS", "false").lower() != "true":
         return "draft_only"
-    host, port = os.getenv("SMTP_HOST"), int(os.getenv("SMTP_PORT", "587"))
-    user, password = os.getenv("SMTP_USER"), os.getenv("SMTP_PASSWORD")
-    sender = os.getenv("SMTP_FROM", user)
-    if not all([host, user, password, sender, to]):
-        return "missing_smtp_config"
+    host = "smtp.gmail.com"
+    port = 587
+    user = os.getenv("GMAIL_USERNAME", "")
+    password = os.getenv("GMAIL_APP_PASSWORD", "")
+    if not all([user, password, to]):
+        return "missing_gmail_config"
     subject = "ROZHAN GLOBAL — International Supply Cooperation"
     body = content
     if content.startswith("SUBJECT:"):
@@ -68,7 +70,7 @@ def send_email(to, content):
         subject = lines[0].replace("SUBJECT:", "").strip() or subject
         body = "\n".join(lines[1:]).strip()
     msg = EmailMessage()
-    msg["From"], msg["To"], msg["Subject"] = sender, to, subject
+    msg["From"], msg["To"], msg["Subject"] = user, to, subject
     msg.set_content(body)
     with smtplib.SMTP(host, port, timeout=30) as smtp:
         smtp.starttls()
@@ -83,7 +85,7 @@ def main():
         return
     rows = list(csv.DictReader(LEADS.open(encoding="utf-8")))
     existing = list(csv.DictReader(OUTREACH.open(encoding="utf-8"))) if OUTREACH.exists() else []
-    done = {r.get("website") for r in existing}
+    done = {r.get("website") for r in existing if r.get("website")}
     fieldnames = ["company_name", "website", "email", "message", "status"]
     new_rows = []
     for row in rows[-10:]:
