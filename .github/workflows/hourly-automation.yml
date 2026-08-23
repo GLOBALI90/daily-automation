@@ -24,11 +24,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Collect leads with SearXNG
+      - name: Collect leads with Gemini Google Search
         env:
-          SEARXNG_URL: ${{ secrets.SEARXNG_URL }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          GEMINI_SEARCH_MODEL: ${{ secrets.GEMINI_SEARCH_MODEL }}
         run: python src/lead_collector.py
 
       - name: Generate AI outreach and send Gmail
