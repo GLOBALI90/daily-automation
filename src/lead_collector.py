@@ -1,8 +1,9 @@
 import csv
 import json
 import os
+import re
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -34,6 +35,8 @@ FIELDS = [
     "linkedin", "source", "evidence", "lead_score"
 ]
 
+HEADERS = {"User-Agent": "ROZHAN-Global-B2B-Research/1.0 (+https://www.rojanglobal.com)"}
+
 
 def google_search(query, num=10):
     key = os.getenv("GOOGLE_CSE_API_KEY")
@@ -43,6 +46,7 @@ def google_search(query, num=10):
     r = requests.get(
         "https://www.googleapis.com/customsearch/v1",
         params={"key": key, "cx": cx, "q": query, "num": min(num, 10)},
+        headers=HEADERS,
         timeout=30,
     )
     r.raise_for_status()
@@ -70,6 +74,35 @@ def infer_product(text):
     return ""
 
 
+def extract_contacts(url):
+    result = {"email": "", "whatsapp": "", "phone": ""}
+    if not url or domain(url) in {"linkedin.com", "facebook.com", "x.com", "twitter.com", "instagram.com"}:
+        return result
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=20)
+        r.raise_for_status()
+        html = r.text[:500_000]
+    except Exception:
+        return result
+
+    emails = re.findall(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", html, re.I)
+    for email in emails:
+        e = email.lower()
+        if not e.endswith(("@example.com",)):
+            result["email"] = e
+            break
+
+    wa = re.findall(r"(?:https?://)?(?:wa\.me/|api\.whatsapp\.com/send\?phone=)([0-9+]{8,20})", html, re.I)
+    if wa:
+        result["whatsapp"] = wa[0]
+
+    phones = re.findall(r"(?:\+?\d[\d .()/-]{7,}\d)", html)
+    if phones:
+        result["phone"] = re.sub(r"\s+", " ", phones[0]).strip()
+
+    return result
+
+
 def collect():
     rows = []
     seen = set()
@@ -83,21 +116,25 @@ def collect():
                     continue
                 seen.add(d)
                 text = f"{item.get('title','')} {item.get('snippet','')}"
+                contacts = extract_contacts(link)
+                website = link
+                if d.startswith("linkedin.com"):
+                    website = item.get("pagemap", {}).get("metatags", [{}])[0].get("og:url", link)
                 rows.append({
                     "company_name": item.get("title", "").split(" | ")[0][:200],
-                    "website": link,
+                    "website": website,
                     "country": "",
                     "industry": infer_product(text),
                     "buyer_type": "Potential buyer / industrial consumer",
                     "product_interest": infer_product(text),
                     "contact_person": "",
-                    "email": "",
-                    "whatsapp": "",
-                    "phone": "",
+                    "email": contacts["email"],
+                    "whatsapp": contacts["whatsapp"],
+                    "phone": contacts["phone"],
                     "linkedin": link if "linkedin.com" in link else "",
                     "source": "Google Custom Search",
                     "evidence": item.get("snippet", "")[:500],
-                    "lead_score": "0"
+                    "lead_score": "1" if contacts["email"] or contacts["phone"] or contacts["whatsapp"] else "0"
                 })
                 if len(rows) >= 10:
                     return rows
@@ -106,13 +143,18 @@ def collect():
 
 def main():
     rows = collect()
-    exists = OUTPUT.exists()
-    with OUTPUT.open("a", newline="", encoding="utf-8") as f:
+    existing_rows = []
+    if OUTPUT.exists():
+        with OUTPUT.open(encoding="utf-8") as f:
+            existing_rows = list(csv.DictReader(f))
+    existing_keys = {r.get("website") for r in existing_rows if r.get("website")}
+    new_rows = [r for r in rows if r.get("website") not in existing_keys]
+    all_rows = existing_rows + new_rows
+    with OUTPUT.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDS)
-        if not exists:
-            writer.writeheader()
-        writer.writerows(rows)
-    print(f"Collected {len(rows)} leads")
+        writer.writeheader()
+        writer.writerows(all_rows)
+    print(f"Collected {len(new_rows)} new leads; total stored: {len(all_rows)}")
 
 
 if __name__ == "__main__":
