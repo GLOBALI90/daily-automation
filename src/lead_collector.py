@@ -36,25 +36,6 @@ HEADERS = {"User-Agent": "ROZHAN-Global-B2B-Research/1.0 (+https://www.rojanglob
 SOCIAL_DOMAINS = {"linkedin.com", "facebook.com", "x.com", "twitter.com", "instagram.com"}
 
 
-def search(query, num=10):
-    base = os.getenv("SEARXNG_URL", "").rstrip("/")
-    if not base:
-        print("SEARXNG_URL is missing")
-        return []
-    try:
-        r = requests.get(
-            base + "/search",
-            params={"q": query, "format": "json", "categories": "general", "language": "en", "pageno": 1},
-            headers=HEADERS,
-            timeout=45,
-        )
-        r.raise_for_status()
-        return r.json().get("results", [])[:num]
-    except Exception as exc:
-        print(f"SearXNG search failed for {query!r}: {exc}")
-        return []
-
-
 def domain(url):
     try:
         return urlparse(url).netloc.lower().replace("www.", "")
@@ -74,6 +55,61 @@ def infer_product(text):
         if word in t:
             return product
     return ""
+
+
+def searx_search(query, num=10):
+    base = os.getenv("SEARXNG_URL", "").rstrip("/")
+    if not base:
+        raise RuntimeError("SEARXNG_URL is missing")
+    r = requests.get(
+        base + "/search",
+        params={"q": query, "format": "json", "categories": "general", "language": "en", "pageno": 1},
+        headers=HEADERS,
+        timeout=45,
+    )
+    r.raise_for_status()
+    return r.json().get("results", [])[:num]
+
+
+def you_search(query, num=10):
+    key = os.getenv("YDC_API_KEY")
+    if not key:
+        raise RuntimeError("YDC_API_KEY is missing")
+    r = requests.get(
+        "https://api.you.com/v1/search",
+        params={"query": query, "count": min(num, 100)},
+        headers={"X-API-Key": key, "Accept": "application/json"},
+        timeout=45,
+    )
+    r.raise_for_status()
+    data = r.json()
+    web = (data.get("results") or {}).get("web") or []
+    results = []
+    for item in web:
+        results.append({
+            "url": item.get("url", ""),
+            "title": item.get("title", ""),
+            "content": item.get("description", "") or item.get("snippet", ""),
+        })
+    return results[:num]
+
+
+def search(query, num=10):
+    try:
+        results = searx_search(query, num)
+        if results:
+            return results, "SearXNG"
+    except Exception as exc:
+        print(f"SearXNG unavailable: {exc}")
+
+    try:
+        results = you_search(query, num)
+        if results:
+            return results, "You.com"
+    except Exception as exc:
+        print(f"You.com backup unavailable: {exc}")
+
+    return [], "none"
 
 
 def extract_contacts(url):
@@ -129,7 +165,8 @@ def collect():
     rows = []
     seen = set()
     for q in QUERIES:
-        for item in search(q, num=10):
+        results, source = search(q, num=10)
+        for item in results:
             link = str(item.get("url", "")).strip()
             d = domain(link)
             if not d or d in seen:
@@ -151,7 +188,7 @@ def collect():
                 "whatsapp": contacts["whatsapp"],
                 "phone": contacts["phone"],
                 "linkedin": link if "linkedin.com" in link else "",
-                "source": "SearXNG",
+                "source": source,
                 "evidence": snippet[:500],
                 "lead_score": "1" if contacts["email"] or contacts["phone"] or contacts["whatsapp"] else "0",
             })
