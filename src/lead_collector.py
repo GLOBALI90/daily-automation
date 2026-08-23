@@ -21,7 +21,7 @@ FIELDS = [
 
 HEADERS = {"User-Agent": "ROZHAN-Global-B2B-Research/1.0 (+https://www.rojanglobal.com)"}
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
-MODEL = os.getenv("GEMINI_SEARCH_MODEL", "gemini-2.5-flash-lite")
+MODEL = os.getenv("GEMINI_SEARCH_MODEL", "gemini-3.5-flash-lite")
 
 PROMPT = f"""
 You are the web research assistant for {COMPANY['brand']} ({COMPANY['legal_name']}).
