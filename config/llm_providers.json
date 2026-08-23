@@ -1,0 +1,31 @@
+{
+  "purpose": "Free-tier LLM provider registry for ROZHAN automation",
+  "providers": [
+    {
+      "name": "Groq",
+      "status": "configured_template",
+      "api_base": "https://api.groq.com/openai/v1",
+      "secret_name": "GROQ_API_KEY",
+      "notes": "Use a currently available free-tier model; verify limits/model availability before production use."
+    },
+    {
+      "name": "Google Gemini",
+      "status": "configured_template",
+      "api_base": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "secret_name": "GEMINI_API_KEY",
+      "notes": "Free-tier availability and quotas depend on current Google AI Studio terms."
+    },
+    {
+      "name": "OpenRouter",
+      "status": "configured_template",
+      "api_base": "https://openrouter.ai/api/v1",
+      "secret_name": "OPENROUTER_API_KEY",
+      "notes": "Use only models currently marked free; availability can change."
+    }
+  ],
+  "policy": {
+    "never_commit_api_keys": true,
+    "use_github_actions_secrets": true,
+    "fallback_order": ["GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY"]
+  }
+}
