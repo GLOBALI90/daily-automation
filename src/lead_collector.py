@@ -2,6 +2,7 @@ import csv
 import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -14,15 +15,23 @@ DATA.mkdir(exist_ok=True)
 OUTPUT = DATA / "leads.csv"
 
 FALLBACK_QUERIES = [
-    '"procurement" "petrochemical" buyer company -jobs -careers -article -blog',
-    '"purchasing manager" chemicals importer company -jobs -careers -article -blog',
-    '"petroleum products" importer industrial consumer company -jobs -careers -article -blog',
+    '"procurement" "petrochemical" buyer company -jobs -careers -article -blog -directory',
+    '"purchasing manager" chemicals importer company -jobs -careers -article -blog -directory',
+    '"petroleum products" importer industrial consumer company -jobs -careers -article -blog -directory',
+]
+
+SECTORS = [
+    ("petroleum products", "refineries, fuel distributors, petroleum importers, oil & gas industrial consumers"),
+    ("chemicals", "chemical manufacturers, industrial chemical consumers, chemical importers"),
+    ("petrochemicals", "petrochemical manufacturers, polymer/feedstock consumers, petrochemical procurement teams"),
+    ("steel", "steel processors, fabricators, mills, construction and industrial consumers, steel importers"),
+    ("renewable energy", "solar, wind, battery and renewable-energy project companies with procurement needs"),
 ]
 
 FIELDS = [
     "company_name", "website", "country", "industry", "buyer_type",
     "product_interest", "contact_person", "email", "whatsapp", "phone",
-    "linkedin", "source", "evidence", "lead_score"
+    "linkedin", "source", "evidence", "lead_score", "run_id", "collected_at", "search_query"
 ]
 
 HEADERS = {"User-Agent": "ROZHAN-Global-B2B-Research/1.0 (+https://www.rojanglobal.com)"}
@@ -31,7 +40,9 @@ EXCLUDED_DOMAINS = {
     "indeed.com", "glassdoor.com", "ziprecruiter.com", "jobleads.com", "bebee.com",
     "michaelpage.com", "westlaketalent.com", "talents.vaia.com", "claytonpersonnel.com",
     "pointtobusinessservices.com", "pndatasol.com", "bluemailmedia.com", "datamarketersgroup.com",
-    "thomasnet.com", "petrochemical.com", "lightsource.ai",
+    "thomasnet.com", "petrochemical.com", "lightsource.ai", "quora.com",
+    "datacaptive.com", "averickmedia.com", "fountmedia.com", "bizinforusa.com",
+    "tradewheel.com", "go4worldbusiness.com",
 }
 EXCLUDED_WORDS = {
     "job", "jobs", "career", "careers", "hiring", "vacancy", "vacancies", "employment",
@@ -41,7 +52,9 @@ EXCLUDED_WORDS = {
 GEMINI_BASE = os.getenv("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta/openai")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 TARGET_LEADS_PER_RUN = 20
-RESULTS_PER_QUERY = 10
+RESULTS_PER_QUERY = 20
+RUN_ID = os.getenv("GITHUB_RUN_ID", datetime.now(timezone.utc).strftime("manual-%Y%m%d%H%M%S"))
+COLLECTED_AT = datetime.now(timezone.utc).isoformat()
 
 
 def domain(url):
@@ -53,35 +66,57 @@ def domain(url):
 
 def looks_like_reject(title, url, snippet):
     d = domain(url)
-    if d in EXCLUDED_DOMAINS:
+    if not d or d in EXCLUDED_DOMAINS:
         return True
     text = f"{title} {url} {snippet}".lower()
     return any(word in text for word in EXCLUDED_WORDS)
 
 
-def plan_queries():
+def load_existing_domains():
+    if not OUTPUT.exists():
+        return set()
+    try:
+        with OUTPUT.open(encoding="utf-8") as f:
+            return {domain(r.get("website", "")) for r in csv.DictReader(f) if domain(r.get("website", ""))}
+    except Exception:
+        return set()
+
+
+def pick_sector():
+    existing_count = 0
+    if OUTPUT.exists():
+        try:
+            with OUTPUT.open(encoding="utf-8") as f:
+                existing_count = max(sum(1 for _ in f) - 1, 0)
+        except Exception:
+            pass
+    index = existing_count // max(TARGET_LEADS_PER_RUN, 1)
+    return SECTORS[index % len(SECTORS)]
+
+
+def plan_queries(existing_domains):
     key = os.getenv("GEMINI_API_KEY")
     if not key or not GEMINI_MODEL:
         return FALLBACK_QUERIES
 
+    sector, examples = pick_sector()
+    excluded_text = ", ".join(sorted(existing_domains)[-80:])
     prompt = f"""You are the search planner for {COMPANY['brand']} ({COMPANY['legal_name']}).
 Business sectors: petroleum products, chemicals, petrochemicals, steel, renewable energy.
 Target customers: direct buyers, industrial consumers, raw-material consumers, importers and procurement companies.
-Create exactly 3 concise web-search queries. Across the 3 queries, cover different sectors and buyer intents.
-Search for real operating companies, manufacturers, industrial consumers, importers, distributors, procurement teams, and purchasing functions.
-Use terms such as buyer, importer, procurement, purchasing, sourcing, industrial consumer, plant, manufacturer, raw materials.
-IMPORTANT: Exclude job boards, job posts, career pages, recruitment pages, articles, blogs, news, courses, webinars, generic directories, email-list sellers, and lead-list vendors.
-Add negative terms like -jobs -careers -hiring -article -blog -directory where useful.
+This run should prioritize: {sector} ({examples}).
+Create exactly 3 concise web-search queries for NEW companies not already used in previous runs.
+Use buyer intent: procurement, purchasing, sourcing, importer, industrial consumer, plant, manufacturer, raw materials.
+Do NOT search job boards, job posts, career pages, recruitment pages, articles, blogs, news, courses, webinars, generic directories, email-list sellers, lead-list vendors, social profiles, or marketplaces.
+Use negative terms such as -jobs -careers -hiring -article -blog -directory -list when useful.
+Prefer real operating company websites and procurement/contact pages.
+Previously used domains that MUST be avoided: {excluded_text}
 Return ONLY a JSON array of 3 strings."""
     try:
         r = requests.post(
             GEMINI_BASE.rstrip("/") + "/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={
-                "model": GEMINI_MODEL,
-                "temperature": 0.2,
-                "messages": [{"role": "user", "content": prompt}],
-            },
+            json={"model": GEMINI_MODEL, "temperature": 0.3, "messages": [{"role": "user", "content": prompt}]},
             timeout=45,
         )
         r.raise_for_status()
@@ -92,7 +127,7 @@ Return ONLY a JSON array of 3 strings."""
             if isinstance(queries, list):
                 queries = [str(q).strip() for q in queries if str(q).strip()]
                 if len(queries) >= 3:
-                    print("Gemini planned 3 search queries")
+                    print(f"Gemini planned 3 search queries for sector: {sector}")
                     return queries[:3]
     except Exception as exc:
         print(f"Gemini query planning failed: {exc}")
@@ -112,26 +147,14 @@ def you_search(query, num=RESULTS_PER_QUERY):
     r.raise_for_status()
     data = r.json()
     web = (data.get("results") or {}).get("web") or []
-    results = []
-    for item in web:
-        results.append({
-            "url": item.get("url", ""),
-            "title": item.get("title", ""),
-            "content": item.get("description", "") or item.get("snippet", ""),
-        })
-    return results[:num]
+    return [{"url": item.get("url", ""), "title": item.get("title", ""), "content": item.get("description", "") or item.get("snippet", "")} for item in web[:num]]
 
 
 def searx_search(query, num=RESULTS_PER_QUERY):
     base = os.getenv("SEARXNG_URL", "").rstrip("/")
     if not base:
         raise RuntimeError("SEARXNG_URL is missing")
-    r = requests.get(
-        base + "/search",
-        params={"q": query, "format": "json", "categories": "general", "language": "en", "pageno": 1},
-        headers=HEADERS,
-        timeout=15,
-    )
+    r = requests.get(base + "/search", params={"q": query, "format": "json", "categories": "general", "language": "en", "pageno": 1}, headers=HEADERS, timeout=15)
     r.raise_for_status()
     return r.json().get("results", [])[:num]
 
@@ -143,26 +166,18 @@ def search(query, num=RESULTS_PER_QUERY):
             return results, "You.com"
     except Exception as exc:
         print(f"You.com primary unavailable: {exc}")
-
     try:
         results = searx_search(query, num)
         if results:
             return results, "SearXNG"
     except Exception as exc:
         print(f"SearXNG backup unavailable: {exc}")
-
     return [], "none"
 
 
 def infer_product(text):
     t = text.lower()
-    for word, product in [
-        ("petrochemical", "Petrochemicals"),
-        ("chemical", "Chemicals"),
-        ("petroleum", "Petroleum products"),
-        ("steel", "Steel"),
-        ("renewable", "Renewable energy"),
-    ]:
+    for word, product in [("petrochemical", "Petrochemicals"), ("chemical", "Chemicals"), ("petroleum", "Petroleum products"), ("steel", "Steel"), ("renewable", "Renewable energy")]:
         if word in t:
             return product
     return ""
@@ -180,22 +195,18 @@ def extract_contacts(url):
         base = r.url
     except Exception:
         return result
-
     emails = re.findall(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", html, re.I)
     for email in emails:
         e = email.lower()
         if not e.endswith("@example.com"):
             result["email"] = e
             break
-
     wa = re.findall(r"(?:https?://)?(?:wa\.me/|api\.whatsapp\.com/send\?phone=)([0-9+]{8,20})", html, re.I)
     if wa:
         result["whatsapp"] = wa[0]
-
     phones = re.findall(r"(?:\+?\d[\d .()/-]{7,}\d)", html)
     if phones:
         result["phone"] = re.sub(r"\s+", " ", phones[0]).strip()
-
     if not result["email"]:
         for path in ("/contact", "/contact-us", "/contacts"):
             try:
@@ -204,8 +215,7 @@ def extract_contacts(url):
                 if not cr.ok:
                     continue
                 chtml = cr.text[:300_000]
-                emails = re.findall(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", chtml, re.I)
-                for email in emails:
+                for email in re.findall(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", chtml, re.I):
                     e = email.lower()
                     if not e.endswith("@example.com"):
                         result["email"] = e
@@ -220,7 +230,8 @@ def extract_contacts(url):
 def collect():
     rows = []
     seen = set()
-    queries = plan_queries()
+    existing_domains = load_existing_domains()
+    queries = plan_queries(existing_domains)
     for q in queries:
         results, source = search(q, num=RESULTS_PER_QUERY)
         for item in results:
@@ -228,26 +239,18 @@ def collect():
             title = str(item.get("title", "")).strip()
             snippet = str(item.get("content", "")).strip()
             d = domain(link)
-            if not d or d in seen or looks_like_reject(title, link, snippet):
+            if not d or d in seen or d in existing_domains or looks_like_reject(title, link, snippet):
                 continue
             seen.add(d)
             text = f"{title} {snippet}"
             contacts = extract_contacts(link)
             rows.append({
-                "company_name": title[:200],
-                "website": link,
-                "country": "",
-                "industry": infer_product(text),
-                "buyer_type": "Potential buyer / industrial consumer",
-                "product_interest": infer_product(text),
-                "contact_person": "",
-                "email": contacts["email"],
-                "whatsapp": contacts["whatsapp"],
-                "phone": contacts["phone"],
-                "linkedin": link if "linkedin.com" in link else "",
-                "source": source,
-                "evidence": snippet[:500],
+                "company_name": title[:200], "website": link, "country": "", "industry": infer_product(text),
+                "buyer_type": "Potential buyer / industrial consumer", "product_interest": infer_product(text),
+                "contact_person": "", "email": contacts["email"], "whatsapp": contacts["whatsapp"], "phone": contacts["phone"],
+                "linkedin": link if "linkedin.com" in link else "", "source": source, "evidence": snippet[:500],
                 "lead_score": "1" if contacts["email"] or contacts["phone"] or contacts["whatsapp"] else "0",
+                "run_id": RUN_ID, "collected_at": COLLECTED_AT, "search_query": q,
             })
             if len(rows) >= TARGET_LEADS_PER_RUN:
                 return rows
@@ -260,14 +263,13 @@ def main():
     if OUTPUT.exists():
         with OUTPUT.open(encoding="utf-8") as f:
             existing_rows = list(csv.DictReader(f))
-    existing_keys = {r.get("website") for r in existing_rows if r.get("website")}
-    new_rows = [r for r in rows if r.get("website") not in existing_keys]
+    existing_keys = {domain(r.get("website", "")) for r in existing_rows if domain(r.get("website", ""))}
+    new_rows = [r for r in rows if domain(r.get("website", "")) not in existing_keys]
     all_rows = existing_rows + new_rows
     with OUTPUT.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDS)
-        writer.writeheader()
-        writer.writerows(all_rows)
-    print(f"Collected {len(new_rows)} new leads; total stored: {len(all_rows)}")
+        writer.writeheader(); writer.writerows(all_rows)
+    print(f"Collected {len(new_rows)} fresh leads; total stored: {len(all_rows)}")
 
 
 if __name__ == "__main__":
