@@ -14,11 +14,9 @@ DATA.mkdir(exist_ok=True)
 OUTPUT = DATA / "leads.csv"
 
 FALLBACK_QUERIES = [
-    '"procurement" "petrochemical" buyer company',
-    '"purchasing manager" chemicals importer company',
-    '"petroleum products" importer industrial consumer company',
-    '"steel" procurement buyer industrial company',
-    '"renewable energy" procurement buyer company',
+    '"procurement" "petrochemical" buyer company -jobs -careers -article -blog',
+    '"purchasing manager" chemicals importer company -jobs -careers -article -blog',
+    '"petroleum products" importer industrial consumer company -jobs -careers -article -blog',
 ]
 
 FIELDS = [
@@ -29,8 +27,21 @@ FIELDS = [
 
 HEADERS = {"User-Agent": "ROZHAN-Global-B2B-Research/1.0 (+https://www.rojanglobal.com)"}
 SOCIAL_DOMAINS = {"linkedin.com", "facebook.com", "x.com", "twitter.com", "instagram.com"}
+EXCLUDED_DOMAINS = {
+    "indeed.com", "glassdoor.com", "ziprecruiter.com", "jobleads.com", "bebee.com",
+    "michaelpage.com", "westlaketalent.com", "talents.vaia.com", "claytonpersonnel.com",
+    "pointtobusinessservices.com", "pndatasol.com", "bluemailmedia.com", "datamarketersgroup.com",
+    "thomasnet.com", "petrochemical.com", "lightsource.ai",
+}
+EXCLUDED_WORDS = {
+    "job", "jobs", "career", "careers", "hiring", "vacancy", "vacancies", "employment",
+    "recruit", "recruitment", "article", "blog", "guide", "directory", "list", "email list",
+    "course", "webinar", "press release", "news", "magazine",
+}
 GEMINI_BASE = os.getenv("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta/openai")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+TARGET_LEADS_PER_RUN = 20
+RESULTS_PER_QUERY = 10
 
 
 def domain(url):
@@ -40,18 +51,27 @@ def domain(url):
         return ""
 
 
+def looks_like_reject(title, url, snippet):
+    d = domain(url)
+    if d in EXCLUDED_DOMAINS:
+        return True
+    text = f"{title} {url} {snippet}".lower()
+    return any(word in text for word in EXCLUDED_WORDS)
+
+
 def plan_queries():
     key = os.getenv("GEMINI_API_KEY")
     if not key or not GEMINI_MODEL:
-        return FALLBACK_QUERIES[:3]
+        return FALLBACK_QUERIES
 
     prompt = f"""You are the search planner for {COMPANY['brand']} ({COMPANY['legal_name']}).
 Business sectors: petroleum products, chemicals, petrochemicals, steel, renewable energy.
 Target customers: direct buyers, industrial consumers, raw-material consumers, importers and procurement companies.
-Create exactly 3 concise web-search queries that maximize discovery of real B2B buyer companies and procurement/contact pages.
-Across the 3 queries, cover different sectors rather than repeating the same wording.
-Prefer terms such as buyer, importer, procurement, purchasing, industrial consumer and raw materials.
-Do not search for jobs, articles, courses or generic directories.
+Create exactly 3 concise web-search queries. Across the 3 queries, cover different sectors and buyer intents.
+Search for real operating companies, manufacturers, industrial consumers, importers, distributors, procurement teams, and purchasing functions.
+Use terms such as buyer, importer, procurement, purchasing, sourcing, industrial consumer, plant, manufacturer, raw materials.
+IMPORTANT: Exclude job boards, job posts, career pages, recruitment pages, articles, blogs, news, courses, webinars, generic directories, email-list sellers, and lead-list vendors.
+Add negative terms like -jobs -careers -hiring -article -blog -directory where useful.
 Return ONLY a JSON array of 3 strings."""
     try:
         r = requests.post(
@@ -71,15 +91,15 @@ Return ONLY a JSON array of 3 strings."""
             queries = json.loads(text[start:end + 1])
             if isinstance(queries, list):
                 queries = [str(q).strip() for q in queries if str(q).strip()]
-                if queries:
-                    print(f"Gemini planned {len(queries[:3])} search queries")
+                if len(queries) >= 3:
+                    print("Gemini planned 3 search queries")
                     return queries[:3]
     except Exception as exc:
         print(f"Gemini query planning failed: {exc}")
-    return FALLBACK_QUERIES[:3]
+    return FALLBACK_QUERIES
 
 
-def you_search(query, num=10):
+def you_search(query, num=RESULTS_PER_QUERY):
     key = os.getenv("YDC_API_KEY")
     if not key:
         raise RuntimeError("YDC_API_KEY is missing")
@@ -102,7 +122,7 @@ def you_search(query, num=10):
     return results[:num]
 
 
-def searx_search(query, num=10):
+def searx_search(query, num=RESULTS_PER_QUERY):
     base = os.getenv("SEARXNG_URL", "").rstrip("/")
     if not base:
         raise RuntimeError("SEARXNG_URL is missing")
@@ -116,7 +136,7 @@ def searx_search(query, num=10):
     return r.json().get("results", [])[:num]
 
 
-def search(query, num=10):
+def search(query, num=RESULTS_PER_QUERY):
     try:
         results = you_search(query, num)
         if results:
@@ -202,15 +222,15 @@ def collect():
     seen = set()
     queries = plan_queries()
     for q in queries:
-        results, source = search(q, num=10)
+        results, source = search(q, num=RESULTS_PER_QUERY)
         for item in results:
             link = str(item.get("url", "")).strip()
-            d = domain(link)
-            if not d or d in seen:
-                continue
-            seen.add(d)
             title = str(item.get("title", "")).strip()
             snippet = str(item.get("content", "")).strip()
+            d = domain(link)
+            if not d or d in seen or looks_like_reject(title, link, snippet):
+                continue
+            seen.add(d)
             text = f"{title} {snippet}"
             contacts = extract_contacts(link)
             rows.append({
@@ -229,7 +249,7 @@ def collect():
                 "evidence": snippet[:500],
                 "lead_score": "1" if contacts["email"] or contacts["phone"] or contacts["whatsapp"] else "0",
             })
-            if len(rows) >= 10:
+            if len(rows) >= TARGET_LEADS_PER_RUN:
                 return rows
     return rows
 
