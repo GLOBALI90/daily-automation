@@ -51,6 +51,7 @@ Country: {row.get('country','')}
 Industry: {row.get('industry','')}
 Potential product interest: {row.get('product_interest','')}
 Evidence: {row.get('evidence','')}
+Search query: {row.get('search_query','')}
 Return only: SUBJECT: ... then the email body.
 """
     return llm(prompt)
@@ -59,8 +60,6 @@ Return only: SUBJECT: ... then the email body.
 def send_email(to, content):
     if os.getenv("SEND_EMAILS", "false").lower() != "true":
         return "draft_only"
-    host = "smtp.gmail.com"
-    port = 587
     user = os.getenv("GMAIL_USERNAME", "")
     password = os.getenv("GMAIL_APP_PASSWORD", "")
     if not all([user, password, to]):
@@ -74,10 +73,8 @@ def send_email(to, content):
     msg = EmailMessage()
     msg["From"], msg["To"], msg["Subject"] = user, to, subject
     msg.set_content(body)
-    with smtplib.SMTP(host, port, timeout=30) as smtp:
-        smtp.starttls()
-        smtp.login(user, password)
-        smtp.send_message(msg)
+    with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as smtp:
+        smtp.starttls(); smtp.login(user, password); smtp.send_message(msg)
     return "sent"
 
 
@@ -88,21 +85,25 @@ def main():
     rows = list(csv.DictReader(LEADS.open(encoding="utf-8")))
     existing = list(csv.DictReader(OUTREACH.open(encoding="utf-8"))) if OUTREACH.exists() else []
     done = {r.get("website") for r in existing if r.get("website")}
-    fieldnames = ["company_name", "website", "email", "message", "status"]
+    current_run_id = os.getenv("GITHUB_RUN_ID", "")
+    if current_run_id:
+        candidates = [r for r in rows if r.get("run_id") == current_run_id]
+    else:
+        candidates = rows[-OUTREACH_LIMIT_PER_RUN:]
+    fieldnames = ["company_name", "website", "email", "message", "status", "run_id"]
     new_rows = []
-    for row in rows[-OUTREACH_LIMIT_PER_RUN:]:
+    for row in candidates[:OUTREACH_LIMIT_PER_RUN]:
         if row.get("website") in done:
             continue
         message = make_message(row)
         if not message:
             continue
         status = send_email(row.get("email", ""), message) if row.get("email") else "no_public_email"
-        new_rows.append({"company_name": row.get("company_name", ""), "website": row.get("website", ""), "email": row.get("email", ""), "message": message, "status": status})
+        new_rows.append({"company_name": row.get("company_name", ""), "website": row.get("website", ""), "email": row.get("email", ""), "message": message, "status": status, "run_id": row.get("run_id", current_run_id)})
     all_rows = existing + new_rows
     with OUTREACH.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(all_rows)
+        writer.writeheader(); writer.writerows(all_rows)
     sent_count = sum(1 for r in new_rows if r.get("status") == "sent")
     print(f"Generated {len(new_rows)} outreach records; sent {sent_count} emails")
 
