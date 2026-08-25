@@ -4,15 +4,13 @@ COPY searxng/settings.yml /etc/searxng/settings.yml
 
 ENV SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml \
     SEARXNG_BIND_ADDRESS=0.0.0.0 \
-    SEARXNG_PORT=10000 \
     SEARXNG_LIMITER=false \
     SEARXNG_PUBLIC_INSTANCE=false \
     SEARXNG_IMAGE_PROXY=false \
     GRANIAN_INTERFACE=wsgi \
     GRANIAN_HOST=0.0.0.0 \
-    GRANIAN_PORT=10000 \
     GRANIAN_WEBSOCKETS=false
 
 EXPOSE 10000
 
-CMD ["granian", "--interface", "wsgi", "--host", "0.0.0.0", "--port", "10000", "searx.webapp:app"]
+CMD ["sh", "-c", "exec granian --interface wsgi --host 0.0.0.0 --port ${PORT:-10000} searx.webapp:app"]
