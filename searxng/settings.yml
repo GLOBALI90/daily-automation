@@ -10,8 +10,10 @@ search:
     - json
 
 server:
+  # Overridden by the Render environment variable SEARXNG_SECRET.
+  secret_key: "${SEARXNG_SECRET}"
   limiter: false
   public_instance: false
   image_proxy: false
-  port: 10000
+  port: 8080
   bind_address: "0.0.0.0"
