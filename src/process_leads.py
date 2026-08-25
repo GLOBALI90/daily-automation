@@ -1,7 +1,6 @@
 import csv
 import json
 import os
-import re
 import smtplib
 from email.message import EmailMessage
 from pathlib import Path
@@ -12,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPANY = json.loads((ROOT / "config/company.json").read_text(encoding="utf-8"))
 LEADS = ROOT / "data/leads.csv"
 OUTREACH = ROOT / "data/outreach.csv"
+
+OUTREACH_LIMIT_PER_RUN = 20
 
 
 def llm(prompt):
@@ -43,6 +44,7 @@ Business: sourcing and international trade in petroleum products, chemicals, pet
 Website: {COMPANY['website']}
 WhatsApp: {COMPANY['whatsapp']}
 Create one concise professional B2B introduction email for this potential buyer.
+Tailor the message to the company's industry, product interest and evidence.
 Use only the facts supplied below. Do not invent products, volumes, names, prices or contact details.
 Company: {row.get('company_name','')}
 Country: {row.get('country','')}
@@ -88,7 +90,7 @@ def main():
     done = {r.get("website") for r in existing if r.get("website")}
     fieldnames = ["company_name", "website", "email", "message", "status"]
     new_rows = []
-    for row in rows[-10:]:
+    for row in rows[-OUTREACH_LIMIT_PER_RUN:]:
         if row.get("website") in done:
             continue
         message = make_message(row)
@@ -101,7 +103,8 @@ def main():
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(all_rows)
-    print(f"Generated {len(new_rows)} outreach records")
+    sent_count = sum(1 for r in new_rows if r.get("status") == "sent")
+    print(f"Generated {len(new_rows)} outreach records; sent {sent_count} emails")
 
 
 if __name__ == "__main__":
