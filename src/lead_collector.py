@@ -13,17 +13,12 @@ DATA = ROOT / "data"
 DATA.mkdir(exist_ok=True)
 OUTPUT = DATA / "leads.csv"
 
-QUERIES = [
+FALLBACK_QUERIES = [
     '"procurement" "petrochemical" buyer company',
     '"purchasing manager" chemicals importer company',
-    '"raw material" "petroleum products" importer company',
-    '"steel" "procurement" industrial company',
-    '"renewable energy" "procurement" company',
-    '"petrochemical" manufacturer procurement',
-    '"chemical" manufacturer purchasing',
-    '"industrial consumer" petroleum products',
-    '"importer" "petroleum products" company',
-    '"importer" chemicals industrial company',
+    '"petroleum products" importer industrial consumer company',
+    '"steel" procurement buyer industrial company',
+    '"renewable energy" procurement buyer company',
 ]
 
 FIELDS = [
@@ -34,6 +29,8 @@ FIELDS = [
 
 HEADERS = {"User-Agent": "ROZHAN-Global-B2B-Research/1.0 (+https://www.rojanglobal.com)"}
 SOCIAL_DOMAINS = {"linkedin.com", "facebook.com", "x.com", "twitter.com", "instagram.com"}
+GEMINI_BASE = os.getenv("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta/openai")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 
 def domain(url):
@@ -43,32 +40,43 @@ def domain(url):
         return ""
 
 
-def infer_product(text):
-    t = text.lower()
-    for word, product in [
-        ("petrochemical", "Petrochemicals"),
-        ("chemical", "Chemicals"),
-        ("petroleum", "Petroleum products"),
-        ("steel", "Steel"),
-        ("renewable", "Renewable energy"),
-    ]:
-        if word in t:
-            return product
-    return ""
+def plan_queries():
+    key = os.getenv("GEMINI_API_KEY")
+    if not key or not GEMINI_MODEL:
+        return FALLBACK_QUERIES[:3]
 
-
-def searx_search(query, num=10):
-    base = os.getenv("SEARXNG_URL", "").rstrip("/")
-    if not base:
-        raise RuntimeError("SEARXNG_URL is missing")
-    r = requests.get(
-        base + "/search",
-        params={"q": query, "format": "json", "categories": "general", "language": "en", "pageno": 1},
-        headers=HEADERS,
-        timeout=45,
-    )
-    r.raise_for_status()
-    return r.json().get("results", [])[:num]
+    prompt = f"""You are the search planner for {COMPANY['brand']} ({COMPANY['legal_name']}).
+Business sectors: petroleum products, chemicals, petrochemicals, steel, renewable energy.
+Target customers: direct buyers, industrial consumers, raw-material consumers, importers and procurement companies.
+Create exactly 3 concise web-search queries that maximize discovery of real B2B buyer companies and procurement/contact pages.
+Across the 3 queries, cover different sectors rather than repeating the same wording.
+Prefer terms such as buyer, importer, procurement, purchasing, industrial consumer and raw materials.
+Do not search for jobs, articles, courses or generic directories.
+Return ONLY a JSON array of 3 strings."""
+    try:
+        r = requests.post(
+            GEMINI_BASE.rstrip("/") + "/chat/completions",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={
+                "model": GEMINI_MODEL,
+                "temperature": 0.2,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=45,
+        )
+        r.raise_for_status()
+        text = r.json()["choices"][0]["message"]["content"].strip()
+        start, end = text.find("["), text.rfind("]")
+        if start != -1 and end != -1:
+            queries = json.loads(text[start:end + 1])
+            if isinstance(queries, list):
+                queries = [str(q).strip() for q in queries if str(q).strip()]
+                if queries:
+                    print(f"Gemini planned {len(queries[:3])} search queries")
+                    return queries[:3]
+    except Exception as exc:
+        print(f"Gemini query planning failed: {exc}")
+    return FALLBACK_QUERIES[:3]
 
 
 def you_search(query, num=10):
@@ -79,7 +87,7 @@ def you_search(query, num=10):
         "https://api.you.com/v1/search",
         params={"query": query, "count": min(num, 100)},
         headers={"X-API-Key": key, "Accept": "application/json"},
-        timeout=45,
+        timeout=30,
     )
     r.raise_for_status()
     data = r.json()
@@ -94,22 +102,50 @@ def you_search(query, num=10):
     return results[:num]
 
 
-def search(query, num=10):
-    try:
-        results = searx_search(query, num)
-        if results:
-            return results, "SearXNG"
-    except Exception as exc:
-        print(f"SearXNG unavailable: {exc}")
+def searx_search(query, num=10):
+    base = os.getenv("SEARXNG_URL", "").rstrip("/")
+    if not base:
+        raise RuntimeError("SEARXNG_URL is missing")
+    r = requests.get(
+        base + "/search",
+        params={"q": query, "format": "json", "categories": "general", "language": "en", "pageno": 1},
+        headers=HEADERS,
+        timeout=15,
+    )
+    r.raise_for_status()
+    return r.json().get("results", [])[:num]
 
+
+def search(query, num=10):
     try:
         results = you_search(query, num)
         if results:
             return results, "You.com"
     except Exception as exc:
-        print(f"You.com backup unavailable: {exc}")
+        print(f"You.com primary unavailable: {exc}")
+
+    try:
+        results = searx_search(query, num)
+        if results:
+            return results, "SearXNG"
+    except Exception as exc:
+        print(f"SearXNG backup unavailable: {exc}")
 
     return [], "none"
+
+
+def infer_product(text):
+    t = text.lower()
+    for word, product in [
+        ("petrochemical", "Petrochemicals"),
+        ("chemical", "Chemicals"),
+        ("petroleum", "Petroleum products"),
+        ("steel", "Steel"),
+        ("renewable", "Renewable energy"),
+    ]:
+        if word in t:
+            return product
+    return ""
 
 
 def extract_contacts(url):
@@ -164,7 +200,8 @@ def extract_contacts(url):
 def collect():
     rows = []
     seen = set()
-    for q in QUERIES:
+    queries = plan_queries()
+    for q in queries:
         results, source = search(q, num=10)
         for item in results:
             link = str(item.get("url", "")).strip()
