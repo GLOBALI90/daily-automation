@@ -11,6 +11,4 @@ ENV SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml \
     GRANIAN_HOST=0.0.0.0 \
     GRANIAN_WEBSOCKETS=false
 
-EXPOSE 10000
-
-CMD ["sh", "-c", "exec granian --interface wsgi --host 0.0.0.0 --port ${PORT:-10000} searx.webapp:app"]
+EXPOSE 8080
