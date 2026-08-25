@@ -2,6 +2,7 @@ import csv
 import json
 import os
 import smtplib
+import time
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -57,7 +58,7 @@ Return only: SUBJECT: ... then the email body.
     return llm(prompt)
 
 
-def send_email(to, content):
+def send_email(to, content, attempts=2):
     if os.getenv("SEND_EMAILS", "false").lower() != "true":
         return "draft_only"
     user = os.getenv("GMAIL_USERNAME", "")
@@ -70,12 +71,24 @@ def send_email(to, content):
         lines = content.splitlines()
         subject = lines[0].replace("SUBJECT:", "").strip() or subject
         body = "\n".join(lines[1:]).strip()
-    msg = EmailMessage()
-    msg["From"], msg["To"], msg["Subject"] = user, to, subject
-    msg.set_content(body)
-    with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as smtp:
-        smtp.starttls(); smtp.login(user, password); smtp.send_message(msg)
-    return "sent"
+
+    last_error = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            msg = EmailMessage()
+            msg["From"], msg["To"], msg["Subject"] = user, to, subject
+            msg.set_content(body)
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as smtp:
+                smtp.starttls()
+                smtp.login(user, password)
+                smtp.send_message(msg)
+            return "sent"
+        except (smtplib.SMTPException, OSError) as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            print(f"Email send failed for {to} (attempt {attempt}/{attempts}): {last_error}")
+            if attempt < attempts:
+                time.sleep(3)
+    return f"send_failed: {last_error}" if last_error else "send_failed"
 
 
 def main():
@@ -90,22 +103,48 @@ def main():
         candidates = [r for r in rows if r.get("run_id") == current_run_id]
     else:
         candidates = rows[-OUTREACH_LIMIT_PER_RUN:]
+
     fieldnames = ["company_name", "website", "email", "message", "status", "run_id"]
     new_rows = []
+
     for row in candidates[:OUTREACH_LIMIT_PER_RUN]:
         if row.get("website") in done:
             continue
         message = make_message(row)
         if not message:
+            new_rows.append({
+                "company_name": row.get("company_name", ""),
+                "website": row.get("website", ""),
+                "email": row.get("email", ""),
+                "message": "",
+                "status": "ai_failed",
+                "run_id": row.get("run_id", current_run_id),
+            })
             continue
-        status = send_email(row.get("email", ""), message) if row.get("email") else "no_public_email"
-        new_rows.append({"company_name": row.get("company_name", ""), "website": row.get("website", ""), "email": row.get("email", ""), "message": message, "status": status, "run_id": row.get("run_id", current_run_id)})
+        if row.get("email"):
+            status = send_email(row.get("email", ""), message)
+        else:
+            status = "no_public_email"
+        new_rows.append({
+            "company_name": row.get("company_name", ""),
+            "website": row.get("website", ""),
+            "email": row.get("email", ""),
+            "message": message,
+            "status": status,
+            "run_id": row.get("run_id", current_run_id),
+        })
+        done.add(row.get("website"))
+
     all_rows = existing + new_rows
     with OUTREACH.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader(); writer.writerows(all_rows)
+        writer.writeheader()
+        writer.writerows(all_rows)
+
     sent_count = sum(1 for r in new_rows if r.get("status") == "sent")
-    print(f"Generated {len(new_rows)} outreach records; sent {sent_count} emails")
+    failed_count = sum(1 for r in new_rows if r.get("status", "").startswith("send_failed"))
+    no_email_count = sum(1 for r in new_rows if r.get("status") == "no_public_email")
+    print(f"Generated {len(new_rows)} outreach records; sent {sent_count} emails; send failures {failed_count}; no public email {no_email_count}")
 
 
 if __name__ == "__main__":
