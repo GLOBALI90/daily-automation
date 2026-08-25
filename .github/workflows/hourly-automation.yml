@@ -24,10 +24,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Collect leads with SearXNG + You.com backup
+      - name: Collect leads with Gemini-planned search
         env:
-          SEARXNG_URL: ${{ secrets.SEARXNG_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           YDC_API_KEY: ${{ secrets.YDC_API_KEY }}
+          SEARXNG_URL: ${{ secrets.SEARXNG_URL }}
         run: python src/lead_collector.py
 
       - name: Generate AI outreach and send Gmail
