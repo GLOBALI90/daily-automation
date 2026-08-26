@@ -14,6 +14,8 @@ LEADS = ROOT / "data/leads.csv"
 OUTREACH = ROOT / "data/outreach.csv"
 
 OUTREACH_LIMIT_PER_RUN = 20
+AUTH_USERNAME = "saberi.export.import@gmail.com"
+FROM_ADDRESS = "INFO@ROJANGLOBAL.COM"
 
 
 def llm(prompt):
@@ -61,9 +63,8 @@ Return only: SUBJECT: ... then the email body.
 def send_email(to, content, attempts=2):
     if os.getenv("SEND_EMAILS", "false").lower() != "true":
         return "draft_only"
-    user = os.getenv("GMAIL_USERNAME", "")
     password = os.getenv("GMAIL_APP_PASSWORD", "")
-    if not all([user, password, to]):
+    if not all([password, to]):
         return "missing_gmail_config"
     subject = "ROZHAN GLOBAL — International Supply Cooperation"
     body = content
@@ -76,11 +77,16 @@ def send_email(to, content, attempts=2):
     for attempt in range(1, attempts + 1):
         try:
             msg = EmailMessage()
-            msg["From"], msg["To"], msg["Subject"] = user, to, subject
+            msg["From"] = FROM_ADDRESS
+            msg["To"] = to
+            msg["Subject"] = subject
+            msg["Reply-To"] = FROM_ADDRESS
             msg.set_content(body)
             with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as smtp:
+                smtp.ehlo()
                 smtp.starttls()
-                smtp.login(user, password)
+                smtp.ehlo()
+                smtp.login(AUTH_USERNAME, password)
                 smtp.send_message(msg)
             return "sent"
         except (smtplib.SMTPException, OSError) as exc:
@@ -121,10 +127,7 @@ def main():
                 "run_id": row.get("run_id", current_run_id),
             })
             continue
-        if row.get("email"):
-            status = send_email(row.get("email", ""), message)
-        else:
-            status = "no_public_email"
+        status = send_email(row.get("email", ""), message) if row.get("email") else "no_public_email"
         new_rows.append({
             "company_name": row.get("company_name", ""),
             "website": row.get("website", ""),
