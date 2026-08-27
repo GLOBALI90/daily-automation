@@ -15,7 +15,7 @@ OUTREACH = ROOT / "data/outreach.csv"
 
 OUTREACH_LIMIT_PER_RUN = 20
 AUTH_USERNAME = "saberi.export.import@gmail.com"
-FROM_ADDRESS = "INFO@ROJANGLOBAL.COM"
+FROM_ADDRESS = "saberi.export.import@gmail.com"
 
 
 def llm(prompt):
