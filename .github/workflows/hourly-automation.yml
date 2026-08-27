@@ -30,7 +30,7 @@ jobs:
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           YDC_API_KEY: ${{ secrets.YDC_API_KEY }}
           SEARXNG_URL: ${{ secrets.SEARXNG_URL }}
-        run: python src/lead_collector.py
+        run: python src/run_collector_resilient.py
 
       - name: Generate AI outreach and send Gmail
         env:
