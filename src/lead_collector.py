@@ -206,16 +206,32 @@ def searx_search(query, num=RESULTS_PER_QUERY):
     base = os.getenv("SEARXNG_URL", "").rstrip("/")
     if not base:
         raise RuntimeError("SEARXNG_URL is missing")
-    r = requests.get(base + "/search", params={"q": query, "format": "json", "categories": "general", "language": "en", "pageno": 1}, headers=HEADERS, timeout=15)
-    r.raise_for_status()
-    return r.json().get("results", [])[:num]
+    last_error = None
+    for attempt, timeout in enumerate((20, 45, 60), start=1):
+        try:
+            r = requests.get(base + "/search", params={"q": query, "format": "json", "categories": "general", "language": "en", "pageno": 1}, headers=HEADERS, timeout=timeout)
+            r.raise_for_status()
+            results = r.json().get("results", [])[:num]
+            if results:
+                print(f"SearXNG backup recovered on attempt {attempt}: {len(results)} results")
+                return results
+            last_error = RuntimeError("SearXNG returned no usable results")
+            print(f"SearXNG backup attempt {attempt}/3 returned 0 usable results")
+        except Exception as exc:
+            last_error = exc
+            print(f"SearXNG backup attempt {attempt}/3 failed: {exc}")
+        if attempt < 3:
+            time.sleep(2)
+    raise RuntimeError(f"SearXNG backup unavailable after 3 attempts: {last_error}")
 
 
 def search(query, num=RESULTS_PER_QUERY):
     try:
         results = you_search(query, num)
         if results:
+            print(f"Search provider: You.com | results={len(results)}")
             return results, "You.com"
+        print("You.com primary returned 0 results")
     except Exception as exc:
         print(f"You.com primary unavailable: {exc}")
     try:
