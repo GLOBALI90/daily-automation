@@ -42,20 +42,46 @@ def llm(prompt):
 
 
 def make_message(row):
-    prompt = f"""You are the B2B trade development assistant for {COMPANY['brand']} ({COMPANY['legal_name']}).
-Business: sourcing and international trade in petroleum products, chemicals, petrochemicals, steel and renewable energy.
+    prompt = f"""You are the senior B2B trade development assistant for {COMPANY['brand']} ({COMPANY['legal_name']}).
+Business: international sourcing and trade in petroleum products, chemicals, petrochemicals, steel and renewable energy.
 Website: {COMPANY['website']}
 WhatsApp: {COMPANY['whatsapp']}
-Create one concise professional B2B introduction email for this potential buyer.
-Tailor the message to the company's industry, product interest and evidence.
-Use only the facts supplied below. Do not invent products, volumes, names, prices or contact details.
+
+Write one concise, high-quality B2B cold-introduction email for this potential buyer.
+The goal is to start a commercial conversation, not to make unsupported claims.
+
+Core positioning to emphasize when relevant:
+- competitive international sourcing and supply
+- potential to help reduce total procurement cost through competitive sourcing, supplier comparison and cross-border trade
+- ability to help solve supply-chain problems such as sourcing difficulty, supplier availability, procurement lead time, continuity of supply and coordination
+- reliable communication and willingness to discuss the buyer's current requirements
+
+PRICE POSITIONING RULES:
+- Present ROZHAN GLOBAL as offering competitive / market-competitive pricing and cost-saving potential.
+- Never claim “lowest price in the world”, “cheapest supplier”, guaranteed savings, or a fixed percentage saving unless that exact fact is present in the supplied evidence.
+- Do not invent prices, discounts, volumes, certifications, inventory, factories, contracts, delivery times, or supplier relationships.
+
+PERSONALIZATION RULES:
+- Tailor the opening and value proposition to the company's industry, product interest, location and evidence.
+- For steel-related buyers, focus on steel/raw-material procurement and production supply needs when supported by evidence.
+- For petrochemical/chemical buyers, focus on relevant feedstocks, industrial chemicals or petrochemical supply only when supported by evidence.
+- Mention only products that are supported by the row or by the company's stated business; do not force a product into an irrelevant lead.
+- Focus on business outcomes: lower procurement cost, alternative sourcing, supply continuity and reduced sourcing friction.
+- Keep the email professional, natural and direct. Avoid exaggerated marketing language.
+- Use a clear, low-friction CTA such as asking whether they have a current or upcoming requirement and offering to review specifications.
+
+Use only the facts supplied below.
 Company: {row.get('company_name','')}
 Country: {row.get('country','')}
 Industry: {row.get('industry','')}
 Potential product interest: {row.get('product_interest','')}
 Evidence: {row.get('evidence','')}
 Search query: {row.get('search_query','')}
-Return only: SUBJECT: ... then the email body.
+
+Return only:
+SUBJECT: ...
+
+Email body
 """
     return llm(prompt)
 
