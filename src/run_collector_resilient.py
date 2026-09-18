@@ -25,7 +25,7 @@ def _normalize_you_results(data, num):
     ]
 
 
-def resilient_you_search(query, num=collector.RESULTS_PER_QUERY):
+def resilient_you_search(query, num=collector.RESULTS_PER_QUERY, exclude_domains=None):
     key = os.getenv("YDC_API_KEY")
     if not key:
         raise RuntimeError("YDC_API_KEY is missing")
@@ -37,7 +37,11 @@ def resilient_you_search(query, num=collector.RESULTS_PER_QUERY):
         try:
             r = requests.post(
                 "https://api.you.com/v1/search",
-                json={"query": query, "count": min(num, 100)},
+                json={
+                    "query": query,
+                    "count": min(num, 100),
+                    "exclude_domains": (exclude_domains or [])[:500],
+                },
                 headers={
                     "X-API-Key": key,
                     "Accept": "application/json",
@@ -45,7 +49,19 @@ def resilient_you_search(query, num=collector.RESULTS_PER_QUERY):
                 },
                 timeout=30,
             )
+            if r.status_code == 429:
+                retry_after = int(r.headers.get("Retry-After", "5") or "5")
+                print(f"You.com rate limited (429); retrying after {retry_after}s")
+                if attempt < 3:
+                    time.sleep(min(max(retry_after, 1), 60))
+                    continue
             r.raise_for_status()
+            print(
+                "You.com rate headers: "
+                f"limit={r.headers.get('X-RateLimit-Limit','?')} "
+                f"remaining={r.headers.get('X-RateLimit-Remaining','?')} "
+                f"reset={r.headers.get('X-RateLimit-Reset','?')}"
+            )
             results = _normalize_you_results(r.json(), num)
             if results:
                 print(f"You.com recovered with POST on attempt {attempt}: {len(results)} results")
@@ -54,23 +70,6 @@ def resilient_you_search(query, num=collector.RESULTS_PER_QUERY):
         except Exception as exc:
             last_error = exc
             print(f"You.com POST attempt {attempt}/3 failed: {exc}")
-
-        try:
-            r = requests.get(
-                "https://api.you.com/v1/search",
-                params={"query": query, "count": min(num, 100)},
-                headers={"X-API-Key": key, "Accept": "application/json"},
-                timeout=30,
-            )
-            r.raise_for_status()
-            results = _normalize_you_results(r.json(), num)
-            if results:
-                print(f"You.com recovered with GET on attempt {attempt}: {len(results)} results")
-                return results
-            print(f"You.com GET attempt {attempt}/3 returned 0 results")
-        except Exception as exc:
-            last_error = exc
-            print(f"You.com GET attempt {attempt}/3 failed: {exc}")
 
         if attempt < 3:
             time.sleep(2 * attempt)
