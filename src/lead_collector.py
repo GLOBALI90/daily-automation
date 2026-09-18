@@ -14,11 +14,17 @@ DATA = ROOT / "data"
 DATA.mkdir(exist_ok=True)
 OUTPUT = DATA / "leads.csv"
 
-FALLBACK_QUERIES = [
-    'China industrial buyer procurement chemicals petrochemicals company -jobs -careers -article -blog -directory',
-    'China steel industrial consumer purchasing company -jobs -careers -article -blog -directory',
-    'China petroleum products importer industrial consumer procurement company -jobs -careers -article -blog -directory',
-]
+def fallback_queries():
+    sector, examples = pick_sector()
+    region, cities = pick_china_region()
+    city_a = cities[0]
+    city_b = cities[1] if len(cities) > 1 else cities[0]
+    zone = CHINA_INDUSTRIAL_ZONES[(len(cities) + len(region)) % len(CHINA_INDUSTRIAL_ZONES)]
+    return [
+        f'"{sector}" procurement purchasing importer manufacturer "{region}" "{city_a}" China contact -jobs -careers -hiring -article -blog -directory -news',
+        f'"{sector}" "industrial park" "{region}" China factory purchasing sourcing procurement "{zone}" -jobs -careers -article -blog -directory -news',
+        f'"{sector}" industrial consumer buyer supplier "{city_a}" OR "{city_b}" China company contact procurement -jobs -careers -article -blog -directory -news',
+    ]
 
 SECTORS = [
     ("petroleum products", "refineries, fuel distributors, petroleum importers, oil & gas industrial consumers"),
@@ -74,6 +80,12 @@ EXCLUDED_DOMAINS = {
     "datacaptive.com", "averickmedia.com", "fountmedia.com", "bizinforusa.com",
     "tradewheel.com", "go4worldbusiness.com",
 }
+NON_COMPANY_TITLE_WORDS = {
+    "procurement", "purchasing", "contact us", "about us", "request a quote",
+    "jobs", "careers", "career", "news", "article", "blog", "directory",
+    "market report", "supplier directory", "top suppliers", "list of",
+}
+
 EXCLUDED_WORDS = {
     "job", "jobs", "career", "careers", "hiring", "vacancy", "vacancies", "employment",
     "recruit", "recruitment", "article", "blog", "guide", "directory", "list", "email list",
@@ -100,7 +112,12 @@ def looks_like_reject(title, url, snippet):
     if not d or d in EXCLUDED_DOMAINS:
         return True
     text = f"{title} {url} {snippet}".lower()
-    return any(word in text for word in EXCLUDED_WORDS)
+    if any(word in text for word in EXCLUDED_WORDS):
+        return True
+    title_text = title.lower().strip()
+    if title_text and any(word in title_text for word in NON_COMPANY_TITLE_WORDS):
+        return True
+    return False
 
 
 def load_existing_domains():
@@ -111,6 +128,25 @@ def load_existing_domains():
             return {domain(r.get("website", "")) for r in csv.DictReader(f) if domain(r.get("website", ""))}
     except Exception:
         return set()
+
+
+def load_recent_domains(limit=450):
+    if not OUTPUT.exists():
+        return []
+    try:
+        with OUTPUT.open(encoding="utf-8") as f:
+            domains = [domain(r.get("website", "")) for r in csv.DictReader(f)]
+        ordered = []
+        seen = set()
+        for d in reversed(domains):
+            if d and d not in seen:
+                seen.add(d)
+                ordered.append(d)
+            if len(ordered) >= limit:
+                break
+        return ordered
+    except Exception:
+        return []
 
 
 def pick_sector():
@@ -140,7 +176,7 @@ def pick_china_region():
 def plan_queries(existing_domains):
     key = os.getenv("GEMINI_API_KEY")
     if not key or not GEMINI_MODEL:
-        return FALLBACK_QUERIES
+        return fallback_queries()
 
     sector, examples = pick_sector()
     region, cities = pick_china_region()
@@ -183,17 +219,17 @@ Return ONLY a JSON array of 3 strings."""
                     return queries[:3]
     except Exception as exc:
         print(f"Gemini query planning failed: {exc}")
-    return FALLBACK_QUERIES
+    return fallback_queries()
 
 
-def you_search(query, num=RESULTS_PER_QUERY):
+def you_search(query, num=RESULTS_PER_QUERY, exclude_domains=None):
     key = os.getenv("YDC_API_KEY")
     if not key:
         raise RuntimeError("YDC_API_KEY is missing")
     r = requests.get(
         "https://api.you.com/v1/search",
-        params={"query": query, "count": min(num, 100)},
-        headers={"X-API-Key": key, "Accept": "application/json"},
+        json={"query": query, "count": min(num, 100), "exclude_domains": (exclude_domains or [])[:500]},
+        headers={"X-API-Key": key, "Accept": "application/json", "Content-Type": "application/json"},
         timeout=30,
     )
     r.raise_for_status()
@@ -225,9 +261,9 @@ def searx_search(query, num=RESULTS_PER_QUERY):
     raise RuntimeError(f"SearXNG backup unavailable after 3 attempts: {last_error}")
 
 
-def search(query, num=RESULTS_PER_QUERY):
+def search(query, num=RESULTS_PER_QUERY, exclude_domains=None):
     try:
-        results = you_search(query, num)
+        results = you_search(query, num, exclude_domains=exclude_domains)
         if results:
             print(f"Search provider: You.com | results={len(results)}")
             return results, "You.com"
@@ -299,10 +335,11 @@ def collect():
     rows = []
     seen = set()
     existing_domains = load_existing_domains()
+    recent_excludes = load_recent_domains(limit=450)
     queries = plan_queries(existing_domains)
     region, _ = pick_china_region()
     for q in queries:
-        results, source = search(q, num=RESULTS_PER_QUERY)
+        results, source = search(q, num=RESULTS_PER_QUERY, exclude_domains=recent_excludes)
         for item in results:
             link = str(item.get("url", "")).strip()
             title = str(item.get("title", "")).strip()
