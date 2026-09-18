@@ -31,8 +31,8 @@ def resilient_you_search(query, num=collector.RESULTS_PER_QUERY, exclude_domains
         raise RuntimeError("YDC_API_KEY is missing")
 
     last_error = None
-    # You.com documents POST /v1/search as the current interface; keep GET as
-    # compatibility fallback because existing integrations still support it.
+    # You.com documents POST /v1/search as the current interface; keep retries
+    # bounded so temporary provider failures do not multiply API usage.
     for attempt in range(1, 4):
         try:
             r = requests.post(
