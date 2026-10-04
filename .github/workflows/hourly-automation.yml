@@ -2,6 +2,18 @@ name: ROZHAN Hourly Automation
 
 on:
   workflow_dispatch:
+    inputs:
+      social_platform:
+        description: "Social network for this manual test"
+        required: false
+        type: choice
+        options:
+          - auto
+          - linkedin
+          - instagram
+          - facebook
+          - x
+        default: auto
 
 permissions:
   contents: write
@@ -22,7 +34,17 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Collect social leads (2-3 max, one network per run)
+        env:
+          APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
+          DECODO_API_KEY: ${{ secrets.DECODO_API_KEY }}
+          YDC_API_KEY: ${{ secrets.YDC_API_KEY }}
+          SOCIAL_PLATFORM: ${{ inputs.social_platform || 'auto' }}
+          SOCIAL_MAX_ITEMS: '3'
+        run: python src/social_collector.py
+
       - name: Collect leads with Gemini-planned search
+        continue-on-error: true
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
@@ -46,5 +68,5 @@ jobs:
           git config user.name "rozhanglobal-automation"
           git config user.email "actions@users.noreply.github.com"
           git add data/
-          git diff --cached --quiet || git commit -m "Update hourly lead and outreach data"
+          git diff --cached --quiet || git commit -m "Add bounded social lead collection"
           git push
