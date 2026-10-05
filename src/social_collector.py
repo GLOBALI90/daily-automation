@@ -15,13 +15,18 @@ PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").lower().strip()
 APIFY = os.getenv("APIFY_API_TOKEN", "").strip()
 SCRAPECREATORS = os.getenv("SCRAPECREATORS_API_KEY", "").strip()
 SOCIALFETCH = os.getenv("SOCIALFETCH_API_KEY", "").strip()
-YDC = os.getenv("YDC_API_KEY", "").strip()
 
 CLOUDFLARE_URL = os.getenv(
     "SOCIAL_DEEP_BACKUP_URL",
     "https://patient-moon-b87e.mohamadsbrfit760li.workers.dev"
 ).strip().rstrip("/")
 CLOUDFLARE_TOKEN = os.getenv("SOCIAL_DEEP_BACKUP_TOKEN", "").strip()
+SEARXNG_URL = os.getenv("SEARXNG_URL", "").strip().rstrip("/")
+SEARXNG_FALLBACKS = [
+    "https://searxng.website",
+    "https://searxng.eshnetwork.space",
+    "https://search.mectov.my.id",
+]
 
 RUN_ID = os.getenv(
     "GITHUB_RUN_ID",
@@ -108,28 +113,69 @@ def good(p, u):
     )
 
 
+def _searx_results(data, num=10):
+    if not isinstance(data, dict):
+        return []
+    return data.get("results") or []
+
+
+def _searx_html_results(html, num=10):
+    urls = []
+    patterns = [
+        r'<a[^>]+class=["\'][^"\']*result_header[^"\']*["\'][^>]+href=["\'](https?://[^"\']+)',
+        r'<a[^>]+href=["\'](https?://[^"\']+)["\'][^>]+class=["\'][^"\']*result_header[^"\']*["\']',
+    ]
+    for pattern in patterns:
+        urls.extend(re.findall(pattern, html, flags=re.I))
+    out = []
+    seen = set()
+    for u in urls:
+        u = u.strip()
+        if u and u not in seen:
+            seen.add(u)
+            out.append({"url": u})
+            if len(out) >= num:
+                break
+    return out
+
+
 def search(q):
-    if not YDC:
-        raise RuntimeError("YDC_API_KEY missing")
-    # You.com Web Search API: current endpoint is ydc-index.io and uses POST.
-    r = session.post(
-        "https://ydc-index.io/v1/search",
-        json={"query": q, "count": 10},
-        headers={
-            "X-API-Key": YDC,
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        },
-        timeout=30
-    )
-    if r.status_code == 401:
-        raise RuntimeError("YDC authentication failed (401): check/replace YDC_API_KEY")
-    if r.status_code == 403:
-        raise RuntimeError(f"YDC forbidden (403): {r.text[:300]}")
-    if r.status_code == 429:
-        raise RuntimeError("YDC rate limited (429)")
-    r.raise_for_status()
-    return (r.json().get("results") or {}).get("web") or []
+    bases = []
+    if SEARXNG_URL:
+        bases.append(SEARXNG_URL)
+    bases.extend(x for x in SEARXNG_FALLBACKS if x not in bases)
+
+    last_error = None
+    for base in bases:
+        try:
+            r = session.get(
+                base + "/search",
+                params={"q": q, "format": "json", "categories": "general", "language": "en", "pageno": 1},
+                timeout=30,
+            )
+            if r.ok:
+                results = _searx_results(r.json(), 10)
+                if results:
+                    print(f"SearXNG discovery: {base} | results={len(results)}")
+                    return results
+        except Exception as exc:
+            last_error = exc
+
+        try:
+            r = session.get(
+                base + "/search",
+                params={"q": q, "categories": "general", "language": "en", "pageno": 1},
+                timeout=30,
+            )
+            r.raise_for_status()
+            results = _searx_html_results(r.text, 10)
+            if results:
+                print(f"SearXNG HTML discovery: {base} | results={len(results)}")
+                return results
+        except Exception as exc:
+            last_error = exc
+
+    raise RuntimeError(f"SearXNG discovery unavailable across {len(bases)} instances: {last_error}")
 
 
 def discover(p):
