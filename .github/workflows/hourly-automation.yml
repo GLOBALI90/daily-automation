@@ -34,33 +34,36 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Collect social leads (2-3 max, one network per run)
+      - name: Collect social leads (3 max, one network per run, provider fallback chain)
         env:
-          APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
-          DECODO_API_KEY: ${{ secrets.DECODO_API_KEY }}
-          YDC_API_KEY: ${{ secrets.YDC_API_KEY }}
-          SOCIAL_PLATFORM: ${{ inputs.social_platform || 'auto' }}
+          SCRAPECREATORS_API_KEY: \${{ secrets.SCRAPECREATORS_API_KEY }}
+          APIFY_API_TOKEN: \${{ secrets.APIFY_API_TOKEN }}
+          SOCIALFETCH_API_KEY: \${{ secrets.SOCIALFETCH_API_KEY }}
+          YDC_API_KEY: \${{ secrets.YDC_API_KEY }}
+          SOCIAL_DEEP_BACKUP_TOKEN: \${{ secrets.SOCIAL_DEEP_BACKUP_TOKEN }}
+          SOCIAL_DEEP_BACKUP_URL: https://patient-moon-b87e.mohamadsbrfit760li.workers.dev
+          SOCIAL_PLATFORM: \${{ inputs.social_platform || 'auto' }}
           SOCIAL_MAX_ITEMS: '3'
         run: python src/social_collector.py
 
       - name: Collect leads with Gemini-planned search
         continue-on-error: true
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
-          YDC_API_KEY: ${{ secrets.YDC_API_KEY }}
-          SEARXNG_URL: ${{ secrets.SEARXNG_URL }}
+          GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: \${{ secrets.GEMINI_MODEL }}
+          YDC_API_KEY: \${{ secrets.YDC_API_KEY }}
+          SEARXNG_URL: \${{ secrets.SEARXNG_URL }}
         run: python src/run_collector_resilient.py
 
       - name: Generate AI outreach and send Gmail
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
+          GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: \${{ secrets.GEMINI_MODEL }}
+          OPENROUTER_API_KEY: \${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: \${{ secrets.OPENROUTER_MODEL }}
           SEND_EMAILS: 'true'
           GMAIL_USERNAME: 'saberi.export.import@gmail.com'
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GMAIL_APP_PASSWORD: \${{ secrets.GMAIL_APP_PASSWORD }}
         run: python src/process_leads.py
 
       - name: Save results
@@ -68,5 +71,5 @@ jobs:
           git config user.name "rozhanglobal-automation"
           git config user.email "actions@users.noreply.github.com"
           git add data/
-          git diff --cached --quiet || git commit -m "Add bounded social lead collection"
+          git diff --cached --quiet || git commit -m "Add bounded social provider fallback chain"
           git push
