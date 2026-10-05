@@ -111,12 +111,23 @@ def good(p, u):
 def search(q):
     if not YDC:
         raise RuntimeError("YDC_API_KEY missing")
-    r = session.get(
-        "https://api.you.com/v1/search",
+    # You.com Web Search API: current endpoint is ydc-index.io and uses POST.
+    r = session.post(
+        "https://ydc-index.io/v1/search",
         json={"query": q, "count": 10},
-        headers={"X-API-Key": YDC, "Accept": "application/json"},
+        headers={
+            "X-API-Key": YDC,
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        },
         timeout=30
     )
+    if r.status_code == 401:
+        raise RuntimeError("YDC authentication failed (401): check/replace YDC_API_KEY")
+    if r.status_code == 403:
+        raise RuntimeError(f"YDC forbidden (403): {r.text[:300]}")
+    if r.status_code == 429:
+        raise RuntimeError("YDC rate limited (429)")
     r.raise_for_status()
     return (r.json().get("results") or {}).get("web") or []
 
