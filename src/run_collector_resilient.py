@@ -6,82 +6,19 @@ from pathlib import Path
 
 import requests
 
-# The workflow executes this file directly from src/. Import the collector module
-# as a local module so it works both in GitHub Actions and when run manually.
 import lead_collector as collector
 
 ORIGINAL_HEADERS = collector.HEADERS
 
-
-def _normalize_you_results(data, num):
-    web = (data.get("results") or {}).get("web") or []
-    return [
-        {
-            "url": item.get("url", ""),
-            "title": item.get("title", ""),
-            "content": item.get("description", "") or item.get("snippet", ""),
-        }
-        for item in web[:num]
-    ]
-
-
-def resilient_you_search(query, num=collector.RESULTS_PER_QUERY, exclude_domains=None):
-    key = os.getenv("YDC_API_KEY")
-    if not key:
-        raise RuntimeError("YDC_API_KEY is missing")
-
-    last_error = None
-    # You.com documents POST /v1/search as the current interface; keep retries
-    # bounded so temporary provider failures do not multiply API usage.
-    for attempt in range(1, 4):
-        try:
-            r = requests.post(
-                "https://api.you.com/v1/search",
-                json={
-                    "query": query,
-                    "count": min(num, 100),
-                    "exclude_domains": (exclude_domains or [])[:500],
-                },
-                headers={
-                    "X-API-Key": key,
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                },
-                timeout=30,
-            )
-            if r.status_code == 429:
-                retry_after = int(r.headers.get("Retry-After", "5") or "5")
-                print(f"You.com rate limited (429); retrying after {retry_after}s")
-                if attempt < 3:
-                    time.sleep(min(max(retry_after, 1), 60))
-                    continue
-            r.raise_for_status()
-            print(
-                "You.com rate headers: "
-                f"limit={r.headers.get('X-RateLimit-Limit','?')} "
-                f"remaining={r.headers.get('X-RateLimit-Remaining','?')} "
-                f"reset={r.headers.get('X-RateLimit-Reset','?')}"
-            )
-            results = _normalize_you_results(r.json(), num)
-            if results:
-                print(f"You.com recovered with POST on attempt {attempt}: {len(results)} results")
-                return results
-            print(f"You.com POST attempt {attempt}/3 returned 0 results")
-        except Exception as exc:
-            last_error = exc
-            print(f"You.com POST attempt {attempt}/3 failed: {exc}")
-
-        if attempt < 3:
-            time.sleep(2 * attempt)
-
-    raise RuntimeError(f"You.com search unavailable after 3 attempts: {last_error}")
+SEARXNG_FALLBACKS = [
+    "https://searxng.website",
+    "https://searxng.eshnetwork.space",
+    "https://search.mectov.my.id",
+]
 
 
 def _query_variants(query):
     variants = [query]
-    # SearXNG may propagate operators to engines that interpret them
-    # differently. Keep the AI query first, then retry with a less restrictive
-    # version that preserves the China/region/industry intent.
     simplified = re.sub(r"\s+", " ", query).strip()
     simplified = re.sub(r"\s-\w+", "", simplified)
     simplified = re.sub(r"\bsite:\.cn\b", "", simplified, flags=re.I)
@@ -90,15 +27,40 @@ def _query_variants(query):
     return variants
 
 
-def resilient_searx_search(query, num=collector.RESULTS_PER_QUERY):
-    base = os.getenv("SEARXNG_URL", "").rstrip("/")
-    if not base:
-        raise RuntimeError("SEARXNG_URL is missing")
+def _html_results(html, num):
+    urls = []
+    patterns = [
+        r'<a[^>]+class=["\'][^"\']*result_header[^"\']*["\'][^>]+href=["\'](https?://[^"\']+)',
+        r'<a[^>]+href=["\'](https?://[^"\']+)["\'][^>]+class=["\'][^"\']*result_header[^"\']*["\']',
+    ]
+    for pattern in patterns:
+        urls.extend(re.findall(pattern, html, flags=re.I))
+
+    out = []
+    seen = set()
+    for u in urls:
+        u = u.strip()
+        if u and u not in seen:
+            seen.add(u)
+            out.append({"url": u, "title": "", "content": ""})
+            if len(out) >= num:
+                break
+    return out
+
+
+def resilient_searx_search(query, num=collector.RESULTS_PER_QUERY, exclude_domains=None):
+    bases = []
+    configured = os.getenv("SEARXNG_URL", "").strip().rstrip("/")
+    if configured:
+        bases.append(configured)
+    bases.extend(x for x in SEARXNG_FALLBACKS if x not in bases)
 
     last_error = None
-    variants = _query_variants(query)
-    for variant in variants:
-        for attempt, timeout in enumerate((20, 45, 60), start=1):
+
+    for variant in _query_variants(query):
+        for base in bases:
+            # Prefer JSON when the instance enables it; public instances may
+            # disable JSON, so fall back to the normal HTML result page.
             try:
                 r = requests.get(
                     base + "/search",
@@ -110,26 +72,47 @@ def resilient_searx_search(query, num=collector.RESULTS_PER_QUERY):
                         "pageno": 1,
                     },
                     headers=ORIGINAL_HEADERS,
-                    timeout=timeout,
+                    timeout=30,
                 )
-                r.raise_for_status()
-                results = r.json().get("results", [])[:num]
-                if results:
-                    print(f"SearXNG backup recovered on attempt {attempt}: {len(results)} results")
-                    return results
-                last_error = RuntimeError("SearXNG returned no usable results")
-                print(f"SearXNG backup attempt {attempt}/3 returned 0 usable results")
+                if r.ok:
+                    results = r.json().get("results", [])[:num]
+                    if results:
+                        print(f"SearXNG discovery: {base} | results={len(results)}")
+                        return results
             except Exception as exc:
                 last_error = exc
-                print(f"SearXNG backup attempt {attempt}/3 failed: {exc}")
-            if attempt < 3:
-                time.sleep(2)
 
-    raise RuntimeError(f"SearXNG backup unavailable after {len(variants)} query variants: {last_error}")
+            try:
+                r = requests.get(
+                    base + "/search",
+                    params={
+                        "q": variant,
+                        "categories": "general",
+                        "language": "en",
+                        "pageno": 1,
+                    },
+                    headers=ORIGINAL_HEADERS,
+                    timeout=30,
+                )
+                r.raise_for_status()
+                results = _html_results(r.text, num)
+                if results:
+                    print(f"SearXNG HTML discovery: {base} | results={len(results)}")
+                    return results
+            except Exception as exc:
+                last_error = exc
+
+    raise RuntimeError(
+        f"SearXNG discovery unavailable across {len(bases)} instances: {last_error}"
+    )
 
 
-collector.you_search = resilient_you_search
-collector.searx_search = resilient_searx_search
+def resilient_search(query, num=collector.RESULTS_PER_QUERY, exclude_domains=None):
+    results = resilient_searx_search(query, num, exclude_domains=exclude_domains)
+    return results, "SearXNG"
+
+
+collector.search = resilient_search
 
 
 def main():
@@ -154,15 +137,11 @@ def main():
         for i, q in enumerate(run_queries, start=1):
             print(f"QUERY {i}: {q}")
 
-    # A Search run that finds nothing because every provider failed is not a
-    # successful collection run. The existing collector writes an empty result
-    # set in that situation, so fail explicitly here to expose the outage.
-    if output.exists():
-        with output.open(encoding="utf-8") as f:
-            rows = list(csv.DictReader(f))
         fresh = [r for r in rows if r.get("run_id") == collector.RUN_ID]
         if not fresh:
-            raise RuntimeError("Search providers returned no fresh leads; failing run instead of reporting false success")
+            raise RuntimeError(
+                "Search providers returned no fresh leads; failing run instead of reporting false success"
+            )
 
 
 if __name__ == "__main__":
