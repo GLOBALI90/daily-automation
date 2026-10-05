@@ -335,19 +335,25 @@ def cloudflare_profile(p, url):
 def provider_chain(p, url):
     errors = []
 
-    for name, fn in [
-        ("ScrapeCreators", lambda: scrapecreators_profile(p, url)),
-        ("Apify", lambda: apify_profile(p, url)),
-        ("SocialFetch", lambda: socialfetch_profile(p, url)),
-        ("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)),
-    ]:
+    # Primary: our Cloudflare Worker. Only fall through when it fails/returns empty.
+    # This keeps paid/provider quotas largely untouched during healthy runs.
+    providers = [
+        ("CloudflarePrimary", lambda: cloudflare_profile(p, url)),
+        ("ScrapeCreatorsBackup", lambda: scrapecreators_profile(p, url)),
+        ("ApifyFailover", lambda: apify_profile(p, url)),
+        ("SocialFetchFailover", lambda: socialfetch_profile(p, url)),
+    ]
+
+    for name, fn in providers:
         try:
             data = fn()
             if data:
+                print(f"Social provider success: {name}")
                 return name, data, errors
             errors.append(f"{name}:empty")
         except Exception as e:
             errors.append(f"{name}:{e}")
+            print(f"Social provider failed: {name} | {e}")
 
     return "", None, errors
 
