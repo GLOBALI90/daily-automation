@@ -19,26 +19,34 @@ FROM_ADDRESS = "saberi.export.import@gmail.com"
 
 
 def llm(prompt):
-    providers = [
-        ("GEMINI_API_KEY", os.getenv("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta/openai"), os.getenv("GEMINI_MODEL", "gemini-3.6-flash")),
-        ("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_BASE", "https://openrouter.ai/api/v1"), os.getenv("OPENROUTER_MODEL", "")),
-    ]
-    for secret, base, model in providers:
-        key = os.getenv(secret)
-        if not key or not model:
-            continue
-        try:
-            r = requests.post(
-                base.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": model, "temperature": 0.3, "messages": [{"role": "user", "content": prompt}]},
-                timeout=60,
-            )
-            r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"].strip()
-        except Exception as exc:
-            print(f"LLM provider {secret} failed: {exc}")
-    return ""
+    key = os.getenv("GEMINI_API_KEY")
+    model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+    base = os.getenv(
+        "GEMINI_API_BASE",
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+    )
+    if not key:
+        print("Gemini provider skipped: GEMINI_API_KEY is not configured")
+        return ""
+    try:
+        r = requests.post(
+            base.rstrip("/") + "/chat/completions",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={
+                "model": model,
+                "temperature": 0.3,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=60,
+        )
+        if not r.ok:
+            safe_body = r.text.replace(key, "***")[:500]
+            print(f"Gemini provider failed: HTTP {r.status_code}: {safe_body}")
+            return ""
+        return r.json()["choices"][0]["message"]["content"].strip()
+    except Exception as exc:
+        print(f"Gemini provider failed: {type(exc).__name__}: {exc}")
+        return ""
 
 
 def make_message(row):
@@ -97,7 +105,8 @@ def send_email(to, content, attempts=2):
     if content.startswith("SUBJECT:"):
         lines = content.splitlines()
         subject = lines[0].replace("SUBJECT:", "").strip() or subject
-        body = "\n".join(lines[1:]).strip()
+        body = "
+".join(lines[1:]).strip()
 
     last_error = ""
     for attempt in range(1, attempts + 1):
