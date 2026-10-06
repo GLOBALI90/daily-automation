@@ -105,8 +105,7 @@ def send_email(to, content, attempts=2):
     if content.startswith("SUBJECT:"):
         lines = content.splitlines()
         subject = lines[0].replace("SUBJECT:", "").strip() or subject
-        body = "
-".join(lines[1:]).strip()
+        body = "\n".join(lines[1:]).strip()
 
     last_error = ""
     for attempt in range(1, attempts + 1):
