@@ -59,8 +59,6 @@ jobs:
         env:
           GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: \${{ secrets.GEMINI_MODEL }}
-          OPENROUTER_API_KEY: \${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: \${{ secrets.OPENROUTER_MODEL }}
           SEND_EMAILS: 'true'
           GMAIL_USERNAME: 'saberi.export.import@gmail.com'
           GMAIL_APP_PASSWORD: \${{ secrets.GMAIL_APP_PASSWORD }}
