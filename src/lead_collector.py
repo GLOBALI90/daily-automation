@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import requests
+from google import genai
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPANY = json.loads((ROOT / "config/company.json").read_text(encoding="utf-8"))
@@ -91,8 +92,7 @@ EXCLUDED_WORDS = {
     "recruit", "recruitment", "article", "blog", "guide", "directory", "list", "email list",
     "course", "webinar", "press release", "news", "magazine",
 }
-GEMINI_BASE = os.getenv("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta/openai")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 TARGET_LEADS_PER_RUN = 20
 RESULTS_PER_QUERY = 20
 TARGET_COUNTRY = "China"
@@ -201,14 +201,11 @@ Use negative terms such as -jobs -careers -hiring -article -blog -directory -lis
 Previously used domains that MUST be avoided: {excluded_text}
 Return ONLY a JSON array of 3 strings."""
     try:
-        r = requests.post(
-            GEMINI_BASE.rstrip("/") + "/chat/completions",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"model": GEMINI_MODEL, "temperature": 0.3, "messages": [{"role": "user", "content": prompt}]},
-            timeout=45,
-        )
-        r.raise_for_status()
-        text = r.json()["choices"][0]["message"]["content"].strip()
+        client = genai.Client(api_key=key)
+        response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+        text = (response.text or "").strip()
+        if not text:
+            raise RuntimeError("Gemini returned an empty response")
         start, end = text.find("["), text.rfind("]")
         if start != -1 and end != -1:
             queries = json.loads(text[start:end + 1])
@@ -218,7 +215,7 @@ Return ONLY a JSON array of 3 strings."""
                     print(f"Gemini planned 3 search queries for sector: {sector} | China region: {region}")
                     return queries[:3]
     except Exception as exc:
-        print(f"Gemini query planning failed: {exc}")
+        print(f"Gemini query planning failed: {type(exc).__name__}: {exc}")
     return fallback_queries()
 
 
