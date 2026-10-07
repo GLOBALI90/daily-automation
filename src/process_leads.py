@@ -7,6 +7,7 @@ from email.message import EmailMessage
 from pathlib import Path
 
 import requests
+from google import genai
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPANY = json.loads((ROOT / "config/company.json").read_text(encoding="utf-8"))
@@ -20,30 +21,18 @@ FROM_ADDRESS = "saberi.export.import@gmail.com"
 
 def llm(prompt):
     key = os.getenv("GEMINI_API_KEY")
-    model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
-    base = os.getenv(
-        "GEMINI_API_BASE",
-        "https://generativelanguage.googleapis.com/v1beta/openai",
-    )
+    model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
     if not key:
         print("Gemini provider skipped: GEMINI_API_KEY is not configured")
         return ""
     try:
-        r = requests.post(
-            base.rstrip("/") + "/chat/completions",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={
-                "model": model,
-                "temperature": 0.3,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=60,
-        )
-        if not r.ok:
-            safe_body = r.text.replace(key, "***")[:500]
-            print(f"Gemini provider failed: HTTP {r.status_code}: {safe_body}")
+        client = genai.Client(api_key=key)
+        response = client.models.generate_content(model=model, contents=prompt)
+        text = (response.text or "").strip()
+        if not text:
+            print("Gemini provider failed: empty response")
             return ""
-        return r.json()["choices"][0]["message"]["content"].strip()
+        return text
     except Exception as exc:
         print(f"Gemini provider failed: {type(exc).__name__}: {exc}")
         return ""
