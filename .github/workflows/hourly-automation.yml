@@ -50,7 +50,7 @@ jobs:
         continue-on-error: true
         env:
           GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: \${{ secrets.GEMINI_MODEL }}
+          GEMINI_MODEL: gemini-3.8-flash
           YDC_API_KEY: \${{ secrets.YDC_API_KEY }}
           SEARXNG_URL: \${{ secrets.SEARXNG_URL }}
         run: python src/run_collector_resilient.py
@@ -58,7 +58,7 @@ jobs:
       - name: Generate AI outreach and send Gmail
         env:
           GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: \${{ secrets.GEMINI_MODEL }}
+          GEMINI_MODEL: gemini-3.8-flash
           SEND_EMAILS: 'true'
           GMAIL_USERNAME: 'saberi.export.import@gmail.com'
           GMAIL_APP_PASSWORD: \${{ secrets.GMAIL_APP_PASSWORD }}
