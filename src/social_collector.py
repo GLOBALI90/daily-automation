@@ -1,4 +1,4 @@
-import csv, json, os
+import csv, json, os, re
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse, quote
@@ -10,7 +10,7 @@ LEADS = DATA / "leads.csv"
 DATA.mkdir(exist_ok=True)
 
 MAX_ITEMS = min(int(os.getenv("SOCIAL_MAX_ITEMS", "3")), 3)
-PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").lower().strip()
+PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").strip().lower().lstrip(chr(92) + "/")
 
 APIFY = os.getenv("APIFY_API_TOKEN", "").strip()
 SCRAPECREATORS = os.getenv("SCRAPECREATORS_API_KEY", "").strip()
@@ -338,10 +338,10 @@ def provider_chain(p, url):
     # Primary: our Cloudflare Worker. Only fall through when it fails/returns empty.
     # This keeps paid/provider quotas largely untouched during healthy runs.
     providers = [
-        ("CloudflarePrimary", lambda: cloudflare_profile(p, url)),
-        ("ScrapeCreatorsBackup", lambda: scrapecreators_profile(p, url)),
-        ("ApifyFailover", lambda: apify_profile(p, url)),
-        ("SocialFetchFailover", lambda: socialfetch_profile(p, url)),
+        ("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)),
+        ("ScrapeCreators", lambda: scrapecreators_profile(p, url)),
+        ("Apify", lambda: apify_profile(p, url)),
+        ("SocialFetch", lambda: socialfetch_profile(p, url)),
     ]
 
     for name, fn in providers:
@@ -359,9 +359,11 @@ def provider_chain(p, url):
 
 
 def normalize_provider(p, provider, data, fallback):
-    if provider == "CloudflareDeepBackup":
-        result = data.get("result") if isinstance(data, dict) else data
-        return "", "", "China", "", "", "", val(result)[:3000], "", "", fallback
+    if provider == "CloudflareDeepBackup" and isinstance(data, dict):
+        # Workers may wrap profile data in one of these common response fields.
+        data = data.get("data") or data.get("result") or data.get("profile") or data
+        if isinstance(data, dict) and isinstance(data.get("result"), dict):
+            data = data["result"]
 
     x = data[0] if isinstance(data, list) and data else data
     if not isinstance(x, dict):
