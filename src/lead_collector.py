@@ -2,6 +2,7 @@ import csv
 import json
 import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -369,9 +370,16 @@ def main():
     existing_keys = {domain(r.get("website", "")) for r in existing_rows if domain(r.get("website", ""))}
     new_rows = [r for r in rows if domain(r.get("website", "")) not in existing_keys]
     all_rows = existing_rows + new_rows
+    # Preserve columns added by social_collector.py when rewriting the shared CSV.
+    fieldnames = list(FIELDS)
+    for row in all_rows:
+        for field in row.keys():
+            if field not in fieldnames:
+                fieldnames.append(field)
     with OUTPUT.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDS)
-        writer.writeheader(); writer.writerows(all_rows)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(all_rows)
     print(f"Collected {len(new_rows)} fresh leads in China focus; total stored: {len(all_rows)}")
 
 
