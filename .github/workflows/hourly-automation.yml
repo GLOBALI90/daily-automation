@@ -14,6 +14,11 @@ on:
           - facebook
           - x
         default: auto
+      send_emails:
+        description: "Actually send outreach emails (leave false during validation)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -34,34 +39,61 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Validate Python syntax
+        run: python -m py_compile src/*.py
+
+      - name: Validate Gemini credentials and model before collection
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-3.8-flash
+        run: |
+          python - <<'PY'
+          import os
+          from google import genai
+
+          key = os.getenv("GEMINI_API_KEY", "").strip()
+          model = os.getenv("GEMINI_MODEL", "").strip()
+          if not key:
+              raise SystemExit("GEMINI_API_KEY is missing from GitHub Actions secrets.")
+          if not model:
+              raise SystemExit("GEMINI_MODEL is not configured.")
+          response = genai.Client(api_key=key).models.generate_content(
+              model=model,
+              contents="Reply with exactly: OK"
+          )
+          if not (response.text or "").strip():
+              raise SystemExit("Gemini returned an empty response during preflight.")
+          print("Gemini authentication and model preflight succeeded.")
+
+          PY
+
       - name: Collect social leads (3 max, one network per run, provider fallback chain)
         env:
-          SCRAPECREATORS_API_KEY: \${{ secrets.SCRAPECREATORS_API_KEY }}
-          APIFY_API_TOKEN: \${{ secrets.APIFY_API_TOKEN }}
-          SOCIALFETCH_API_KEY: \${{ secrets.SOCIALFETCH_API_KEY }}
-          YDC_API_KEY: \${{ secrets.YDC_API_KEY }}
-          SOCIAL_DEEP_BACKUP_TOKEN: \${{ secrets.SOCIAL_DEEP_BACKUP_TOKEN }}
+          SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
+          APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
+          SOCIALFETCH_API_KEY: ${{ secrets.SOCIALFETCH_API_KEY }}
+          YDC_API_KEY: ${{ secrets.YDC_API_KEY }}
+          SOCIAL_DEEP_BACKUP_TOKEN: ${{ secrets.SOCIAL_DEEP_BACKUP_TOKEN }}
           SOCIAL_DEEP_BACKUP_URL: https://patient-moon-b87e.mohamadsbrfit760li.workers.dev
-          SOCIAL_PLATFORM: \${{ inputs.social_platform || 'auto' }}
+          SOCIAL_PLATFORM: ${{ inputs.social_platform || 'auto' }}
           SOCIAL_MAX_ITEMS: '3'
         run: python src/social_collector.py
 
       - name: Collect leads with Gemini-planned search
-        continue-on-error: true
         env:
-          GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: gemini-3.8-flash
-          YDC_API_KEY: \${{ secrets.YDC_API_KEY }}
-          SEARXNG_URL: \${{ secrets.SEARXNG_URL }}
+          YDC_API_KEY: ${{ secrets.YDC_API_KEY }}
+          SEARXNG_URL: ${{ secrets.SEARXNG_URL }}
         run: python src/run_collector_resilient.py
 
       - name: Generate AI outreach and send Gmail
         env:
-          GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: gemini-3.8-flash
-          SEND_EMAILS: 'true'
+          SEND_EMAILS: ${{ inputs.send_emails }}
           GMAIL_USERNAME: 'saberi.export.import@gmail.com'
-          GMAIL_APP_PASSWORD: \${{ secrets.GMAIL_APP_PASSWORD }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python src/process_leads.py
 
       - name: Save results
