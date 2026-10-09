@@ -19,6 +19,15 @@ on:
         required: false
         type: boolean
         default: false
+      social_max_items:
+        description: "Maximum social profiles to process in this run (start with 1 to limit provider usage)"
+        required: false
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+        default: "1"
 
 permissions:
   contents: write
@@ -76,7 +85,7 @@ jobs:
           SOCIAL_DEEP_BACKUP_TOKEN: ${{ secrets.SOCIAL_DEEP_BACKUP_TOKEN }}
           SOCIAL_DEEP_BACKUP_URL: https://patient-moon-b87e.mohamadsbrfit760li.workers.dev
           SOCIAL_PLATFORM: ${{ inputs.social_platform || 'auto' }}
-          SOCIAL_MAX_ITEMS: '3'
+          SOCIAL_MAX_ITEMS: ${{ inputs.social_max_items || '1' }}
         run: python src/social_collector.py
 
       - name: Collect leads with Gemini-planned search
