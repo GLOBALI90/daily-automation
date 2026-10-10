@@ -15,7 +15,7 @@ COMPANY = json.loads((ROOT / "config/company.json").read_text(encoding="utf-8"))
 LEADS = ROOT / "data/leads.csv"
 OUTREACH = ROOT / "data/outreach.csv"
 
-OUTREACH_LIMIT_PER_RUN = 20
+OUTREACH_LIMIT_PER_RUN = 3
 AUTH_USERNAME = "saberi.export.import@gmail.com"
 FROM_ADDRESS = "saberi.export.import@gmail.com"
 
