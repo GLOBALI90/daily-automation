@@ -32,8 +32,6 @@ on:
           - "1"
         default: "1"
 
-  schedule:
-    - cron: "0 */3 * * *"
 
 permissions:
   contents: write
