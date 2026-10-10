@@ -9,7 +9,7 @@ DATA = ROOT / "data"
 LEADS = DATA / "leads.csv"
 DATA.mkdir(exist_ok=True)
 
-MAX_ITEMS = min(int(os.getenv("SOCIAL_MAX_ITEMS", "3")), 3)
+MAX_ITEMS = 1  # Respect the Worker daily collection cap: one profile per run.
 PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").strip().lower().lstrip(chr(92) + "/")
 
 APIFY = os.getenv("APIFY_API_TOKEN", "").strip()
@@ -111,6 +111,40 @@ def good(p, u):
         x in u.lower()
         for x in ["/search", "/explore", "/hashtag", "/jobs"]
     )
+
+INDUSTRY_TERMS = (
+    "chemical", "petrochemical", "petroleum", "oil and gas", "oil & gas",
+    "refinery", "steel", "metal", "industrial", "manufacturer", "manufacturing",
+    "factory", "polymer", "resin", "fertilizer", "solvent", "solar", "wind",
+    "battery", "renewable energy", "raw material", "feedstock"
+)
+BUYER_TERMS = (
+    "company", "group", "limited", "ltd", "manufacturer", "manufacturing",
+    "factory", "industrial", "supplier", "production", "procurement",
+    "importer", "refinery", "plant", "products", "materials"
+)
+CHINA_SIGNALS = (
+    "china", "chinese", "jiangsu", "guangdong", "zhejiang", "shandong",
+    "shanghai", "tianjin", "hebei", "liaoning", "fujian", "hubei",
+    "suzhou", "nanjing", "wuxi", "changzhou", "nantong", "guangzhou",
+    "shenzhen", "foshan", "dongguan", "huizhou", "ningbo", "hangzhou",
+    "qingdao", "dongying", "yantai", "weifang", "jinan", "tangshan",
+    "cangzhou", "dalian", "shenyang", "yingkou", "xiamen", "quanzhou",
+    "fuzhou", "wuhan", "yichang"
+)
+
+def relevant_social_profile(platform, url, company, website, location, bio):
+    text = " ".join([url, company, website, location, bio]).lower()
+    host = domain(url)
+    if not company or company.lower() in {"unknown", "none", "n/a", "facebook", "instagram", "linkedin"}:
+        return False
+    if not any(term in text for term in INDUSTRY_TERMS):
+        return False
+    if not any(term in text for term in BUYER_TERMS):
+        return False
+    if not (host.endswith(".cn") or any(signal in text for signal in CHINA_SIGNALS)):
+        return False
+    return True
 
 
 def _searx_results(data, num=10):
@@ -517,6 +551,10 @@ def main():
         company, web, loc, contact, email, phone, bio, followers, verified, surl = (
             normalize_provider(p, provider, data, url)
         )
+
+        if not relevant_social_profile(p, surl or url, company, web, loc, bio):
+            print(f"Rejected low-confidence social result: platform={p}; url={url}")
+            continue
 
         if (p, surl) in seen:
             continue
