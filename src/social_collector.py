@@ -515,8 +515,11 @@ def normalize_provider(p, provider, data, fallback):
 
 
 def main():
+    # AUTO rotates one network per UTC day so repeated manual triggers cannot
+    # accidentally pin the automation to a single weekday-based network.
+    day_of_year = datetime.now(timezone.utc).timetuple().tm_yday
     p = PLATFORM if PLATFORM in PLATFORMS else PLATFORMS[
-        datetime.now(timezone.utc).weekday() % 4
+        (day_of_year - 1) % len(PLATFORMS)
     ]
     found = discover(p)
 
