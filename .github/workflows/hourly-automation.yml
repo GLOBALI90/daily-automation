@@ -13,7 +13,7 @@ on:
           - instagram
           - facebook
           - x
-        default: auto
+        default: facebook
       send_emails:
         description: "Actually send outreach emails (leave false during validation)"
         required: false
