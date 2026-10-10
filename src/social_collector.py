@@ -229,19 +229,41 @@ def search(q):
     raise RuntimeError(f"SearXNG discovery unavailable across {len(bases)} instances: {last_error}")
 
 
-def discover(p):
-    out = []
-    seen = set()
-    for q in QUERIES[p]:
-        for x in search(q):
-            u = (x.get("url") or "").rstrip("/")
-            if good(p, u) and u not in seen:
-                seen.add(u)
-                out.append((u, q))
-                if len(out) >= MAX_ITEMS:
-                    return out
-    return out
+def social_candidate_score(platform, result, url):
+    title = val(result.get("title"))
+    snippet = val(result.get("content") or result.get("snippet") or result.get("description"))
+    text = " ".join([title, snippet, url]).lower()
+    industry_hits = sum(1 for term in INDUSTRY_TERMS if term in text)
+    buyer_hits = sum(1 for term in BUYER_TERMS if term in text)
+    china_hits = sum(1 for term in CHINA_SIGNALS if term in text)
+    # Avoid consuming a profile-fetch quota on unrelated pages that merely
+    # appeared in a broad social search result.
+    if not industry_hits or not buyer_hits or not china_hits:
+        return 0
+    return industry_hits * 4 + buyer_hits * 2 + china_hits
 
+
+def discover(p):
+    for q in QUERIES[p]:
+        ranked = []
+        seen = set()
+        for item in search(q):
+            u = (item.get("url") or "").rstrip("/")
+            if not u or u in seen or not good(p, u):
+                continue
+            seen.add(u)
+            score = social_candidate_score(p, item, u)
+            if score:
+                ranked.append((score, u, q))
+        if ranked:
+            ranked.sort(key=lambda item: item[0], reverse=True)
+            chosen = ranked[0]
+            print(
+                f"Social discovery ranking: platform={p}; candidates={len(ranked)}; "
+                f"selected_score={chosen[0]}; url={chosen[1]}"
+            )
+            return [(chosen[1], chosen[2])]
+    return []
 
 def get_json(url, headers=None, params=None, timeout=45):
     r = session.get(
