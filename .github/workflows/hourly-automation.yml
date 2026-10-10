@@ -15,10 +15,15 @@ on:
           - x
         default: facebook
       send_emails:
-        description: "Actually send outreach emails (leave false during validation)"
+        description: "Actually send outreach emails to qualified leads with public business email addresses"
         required: false
         type: boolean
-        default: false
+        default: true
+      send_whatsapp:
+        description: "Actually send WhatsApp outreach through WAHA to qualified leads with public international numbers"
+        required: false
+        type: boolean
+        default: true
       social_max_items:
         description: "Hard-capped at one profile per run to respect the Cloudflare Worker daily limit"
         required: false
@@ -122,6 +127,10 @@ jobs:
           SEND_EMAILS: ${{ inputs.send_emails }}
           GMAIL_USERNAME: 'saberi.export.import@gmail.com'
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          WHATSAPP_ENABLED: ${{ inputs.send_whatsapp }}
+          WAHA_URL: ${{ secrets.WAHA_URL }}
+          WAHA_API_KEY: ${{ secrets.WAHA_API_KEY }}
+          WAHA_SESSION: ${{ secrets.WAHA_SESSION }}
         run: python src/process_leads.py
 
       - name: Save results
