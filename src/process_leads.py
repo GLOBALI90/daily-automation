@@ -188,9 +188,16 @@ def main():
         writer.writerows(all_rows)
 
     sent_count = sum(1 for r in new_rows if r.get("status") == "sent")
+    draft_count = sum(1 for r in new_rows if r.get("status") == "draft_only")
     failed_count = sum(1 for r in new_rows if r.get("status", "").startswith("send_failed"))
     no_email_count = sum(1 for r in new_rows if r.get("status") == "no_public_email")
-    print(f"Generated {len(new_rows)} outreach records; sent {sent_count} emails; send failures {failed_count}; no public email {no_email_count}")
+    ai_failed_count = sum(1 for r in new_rows if r.get("status") == "ai_failed")
+    print(
+        f"Outreach summary: generated={len(new_rows)}; draft_only={draft_count}; "
+        f"sent={sent_count}; send_failures={failed_count}; "
+        f"no_public_email={no_email_count}; ai_failed={ai_failed_count}; "
+        f"send_enabled={os.getenv('SEND_EMAILS', 'false').lower() == 'true'}"
+    )
 
 
 if __name__ == "__main__":
