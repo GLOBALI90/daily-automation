@@ -437,15 +437,90 @@ def returned_profile_url(provider, p, data):
 
 
 def profile_field_names(company, web, loc, contact, email, phone, bio, followers, verified):
+    # Count distinct profile attributes only; name and contact often contain the same value.
     values = {
         "name": company, "website": web, "location_or_address": loc,
-        "contact_name": contact, "email": email, "phone": phone,
-        "description_or_bio": bio, "followers": followers, "verified": verified,
+        "email": email, "phone": phone, "description_or_bio": bio,
+        "followers": followers, "verified": verified,
     }
     return [key for key, value in values.items() if val(value)]
 
 
+def _profile_dicts(value, depth=0):
+    """Yield likely profile dictionaries from common API/Worker wrappers."""
+    if depth > 6:
+        return
+    if isinstance(value, dict):
+        priority = ("profile", "page", "business", "data", "result", "results", "items", "user", "account")
+        for key in priority:
+            child = value.get(key)
+            if isinstance(child, (dict, list)):
+                yield from _profile_dicts(child, depth + 1)
+        yield value
+        for key, child in value.items():
+            if key not in priority and isinstance(child, (dict, list)):
+                yield from _profile_dicts(child, depth + 1)
+    elif isinstance(value, list):
+        for child in value[:10]:
+            yield from _profile_dicts(child, depth + 1)
+
+
+def _first_profile_value(nodes, aliases):
+    for node in nodes:
+        for key in aliases:
+            value = node.get(key)
+            if value not in (None, "", [], {}):
+                if isinstance(value, dict):
+                    value = value.get("text") or value.get("value") or value.get("name") or ""
+                if isinstance(value, list):
+                    value = ", ".join(val(v) for v in value if val(v))
+                result = val(value)
+                if result:
+                    return result
+    return ""
+
+
+def normalize_cloudflare_profile(platform, data, fallback):
+    nodes = list(_profile_dicts(data))
+    name = _first_profile_value(nodes, (
+        "name", "pageName", "page_name", "displayName", "display_name",
+        "title", "fullName", "full_name", "username", "handle"
+    ))
+    website = _first_profile_value(nodes, (
+        "website", "websiteUrl", "website_url", "externalUrl", "external_url",
+        "link", "web_url"
+    ))
+    location = _first_profile_value(nodes, (
+        "address", "location", "city", "currentCity", "current_city"
+    ))
+    email = _first_profile_value(nodes, (
+        "email", "emailAddress", "email_address", "publicEmail",
+        "public_email", "contactEmail", "contact_email"
+    ))
+    phone = _first_profile_value(nodes, (
+        "phone", "phoneNumber", "phone_number", "contactPhone", "contact_phone"
+    ))
+    bio = _first_profile_value(nodes, (
+        "description", "about", "intro", "bio", "biography", "pageIntro",
+        "page_intro", "headline", "category", "services"
+    ))
+    followers = _first_profile_value(nodes, (
+        "followersCount", "followers_count", "followerCount", "follower_count",
+        "followers", "followersText", "likesCount", "likes_count", "fan_count",
+        "fanCount", "likes"
+    ))
+    verified = _first_profile_value(nodes, ("verified", "isVerified", "is_verified"))
+    profile_url = _first_profile_value(nodes, (
+        "url", "profileUrl", "profile_url", "pageUrl", "page_url", "input"
+    )) or fallback
+    contact = name
+    return name, website, location, contact, email, phone, bio, followers, verified, profile_url
+
+
 def normalize_provider(p, provider, data, fallback):
+    if provider == "CloudflareDeepBackup":
+        return normalize_cloudflare_profile(p, data, fallback)
+
     if provider == "CloudflareDeepBackup" and isinstance(data, dict):
         # Workers may wrap profile data in one of these common response fields.
         data = data.get("data") or data.get("result") or data.get("profile") or data
