@@ -80,7 +80,10 @@ EXCLUDED_DOMAINS = {
     "pointtobusinessservices.com", "pndatasol.com", "bluemailmedia.com", "datamarketersgroup.com",
     "thomasnet.com", "petrochemical.com", "lightsource.ai", "quora.com",
     "datacaptive.com", "averickmedia.com", "fountmedia.com", "bizinforusa.com",
-    "tradewheel.com", "go4worldbusiness.com",
+    "tradewheel.com", "go4worldbusiness.com", "youtube.com", "youtu.be",
+    "wikipedia.org", "baike.baidu.com", "baidu.com", "tripadvisor.com",
+    "chinadiscovery.com", "forums.autodesk.com", "autodesk.com",
+    "slocounty.ca.gov", "elaws.us", "municode.com", "reddit.com",
 }
 NON_COMPANY_TITLE_WORDS = {
     "procurement", "purchasing", "contact us", "about us", "request a quote",
@@ -132,26 +135,42 @@ CHINA_SIGNALS = (
 
 def looks_like_reject(title, url, snippet):
     d = domain(url).lower().split(":")[0]
-    if not d:
+    if not d or not title.strip():
         return True
     if any(d == blocked or d.endswith("." + blocked) for blocked in EXCLUDED_DOMAINS):
         return True
-    if not title.strip():
+    if any(d == social or d.endswith("." + social) for social in SOCIAL_DOMAINS):
         return True
-    text = f"{title} {url} {snippet}".lower()
+
     title_text = title.lower().strip()
+    path_text = urlparse(url).path.lower()
+    if any(marker in path_text for marker in (
+        "/wiki/", "/tourism", "/tour/", "/forum/", "/forums/", "/community/",
+        "/watch", "/video", "/reel/", "/profile/", "/search"
+    )):
+        return True
+
+    # Do not qualify a generic article merely because its snippet mentions industry.
+    text = f"{title} {snippet}".lower()
     if any(re.search(r"\b" + re.escape(word) + r"\b", text) for word in EXCLUDED_WORDS):
         return True
     if any(word in title_text for word in NON_COMPANY_TITLE_WORDS):
         return True
     if not any(term in text for term in INDUSTRY_TERMS):
         return True
-    if not any(re.search(r"\b" + re.escape(term) + r"\b", text) for term in BUYER_TERMS):
+
+    strong_buyer_signals = (
+        "manufacturer", "manufacturing", "factory", "factories", "supplier",
+        "suppliers", "procurement", "purchasing", "importer", "importers",
+        "refinery", "refineries", "plant", "plants", "limited", "ltd",
+        "corporation", " corp", "company", "group", "chemicals", "chemical",
+        "steel", "petrochemical", "petroleum", "industrial materials"
+    )
+    if not any(signal in text for signal in strong_buyer_signals):
         return True
     if not d.endswith(".cn") and not any(signal in text for signal in CHINA_SIGNALS):
         return True
     return False
-
 
 def load_existing_domains():
     if not OUTPUT.exists():
