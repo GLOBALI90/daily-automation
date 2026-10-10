@@ -135,6 +135,21 @@ CHINA_SIGNALS = (
     "fuzhou", "wuhan", "yichang"
 )
 
+def infer_social_industry(company, website, location, bio):
+    text = " ".join([company, website, location, bio]).lower()
+    if "petrochemical" in text or "polymer" in text or "feedstock" in text:
+        return "petrochemicals"
+    if "petroleum" in text or "oil and gas" in text or "oil & gas" in text or "refinery" in text:
+        return "petroleum products"
+    if "steel" in text or "metal" in text:
+        return "steel"
+    if "renewable" in text or "solar" in text or "wind energy" in text or "battery" in text:
+        return "renewable energy"
+    if "chemical" in text or "solvent" in text or "fertilizer" in text or "resin" in text:
+        return "chemicals"
+    return ""
+
+
 def relevant_social_profile(platform, url, company, website, location, bio):
     text = " ".join([url, company, website, location, bio]).lower()
     host = domain(url)
@@ -728,13 +743,21 @@ def main():
             continue
 
         row = {f: "" for f in fields}
+        inferred_industry = infer_social_industry(company, web, loc, bio)
+        product_labels = {
+            "petroleum products": "petroleum products",
+            "chemicals": "industrial chemicals",
+            "petrochemicals": "petrochemicals and feedstocks",
+            "steel": "steel and metal products",
+            "renewable energy": "renewable-energy equipment and materials",
+        }
         row.update({
             "company_name": company,
             "website": web,
             "country": "China",
-            "industry": p,
-            "buyer_type": "social_discovery",
-            "product_interest": "petroleum products / chemicals / petrochemicals / steel / renewable energy",
+            "industry": inferred_industry,
+            "buyer_type": "industrial buyer / manufacturer / importer",
+            "product_interest": product_labels.get(inferred_industry, inferred_industry),
             "contact_person": contact,
             "email": email,
             "phone": phone,
