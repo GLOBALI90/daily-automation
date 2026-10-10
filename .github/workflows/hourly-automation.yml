@@ -32,6 +32,9 @@ on:
           - "1"
         default: "1"
 
+  schedule:
+    - cron: "0 */3 * * *"
+
 permissions:
   contents: write
 
@@ -124,10 +127,10 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: gemini-3.8-flash
-          SEND_EMAILS: ${{ inputs.send_emails }}
+          SEND_EMAILS: ${{ github.event_name == 'schedule' && 'true' || inputs.send_emails }}
           GMAIL_USERNAME: 'saberi.export.import@gmail.com'
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          WHATSAPP_ENABLED: ${{ inputs.send_whatsapp }}
+          WHATSAPP_ENABLED: ${{ github.event_name == 'schedule' && 'true' || inputs.send_whatsapp }}
           WAHA_URL: ${{ secrets.WAHA_URL }}
           WAHA_API_KEY: ${{ secrets.WAHA_API_KEY }}
           WAHA_SESSION: ${{ secrets.WAHA_SESSION }}
