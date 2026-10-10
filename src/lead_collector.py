@@ -108,15 +108,47 @@ def domain(url):
         return ""
 
 
+INDUSTRY_TERMS = (
+    "chemical", "chemicals", "petrochemical", "petrochemicals", "petroleum",
+    "oil and gas", "oil & gas", "refinery", "refineries", "steel", "metal",
+    "industrial", "manufacturer", "manufacturing", "factory", "factories",
+    "polymer", "resin", "fertilizer", "solvent", "coating", "solar", "wind",
+    "battery", "renewable energy", "raw material", "feedstock"
+)
+BUYER_TERMS = (
+    "company", "group", "limited", "ltd", "corporation", "corp", "manufacturer",
+    "manufacturing", "factory", "industrial", "supplier", "production",
+    "procurement", "importer", "refinery", "plant", "products", "materials"
+)
+CHINA_SIGNALS = (
+    "china", "chinese", "jiangsu", "guangdong", "zhejiang", "shandong",
+    "shanghai", "tianjin", "hebei", "liaoning", "fujian", "hubei",
+    "suzhou", "nanjing", "wuxi", "changzhou", "nantong", "guangzhou",
+    "shenzhen", "foshan", "dongguan", "huizhou", "ningbo", "hangzhou",
+    "shaoxing", "jiaxing", "qingdao", "dongying", "yantai", "weifang",
+    "jinan", "tangshan", "cangzhou", "dalian", "shenyang", "yingkou",
+    "xiamen", "quanzhou", "fuzhou", "wuhan", "yichang"
+)
+
 def looks_like_reject(title, url, snippet):
-    d = domain(url)
-    if not d or d in EXCLUDED_DOMAINS:
+    d = domain(url).lower().split(":")[0]
+    if not d:
+        return True
+    if any(d == blocked or d.endswith("." + blocked) for blocked in EXCLUDED_DOMAINS):
+        return True
+    if not title.strip():
         return True
     text = f"{title} {url} {snippet}".lower()
-    if any(word in text for word in EXCLUDED_WORDS):
-        return True
     title_text = title.lower().strip()
-    if title_text and any(word in title_text for word in NON_COMPANY_TITLE_WORDS):
+    if any(re.search(r"\b" + re.escape(word) + r"\b", text) for word in EXCLUDED_WORDS):
+        return True
+    if any(word in title_text for word in NON_COMPANY_TITLE_WORDS):
+        return True
+    if not any(term in text for term in INDUSTRY_TERMS):
+        return True
+    if not any(re.search(r"\b" + re.escape(term) + r"\b", text) for term in BUYER_TERMS):
+        return True
+    if not d.endswith(".cn") and not any(signal in text for signal in CHINA_SIGNALS):
         return True
     return False
 
