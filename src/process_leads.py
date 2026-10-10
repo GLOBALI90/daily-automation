@@ -68,11 +68,16 @@ PERSONALIZATION RULES:
 - Use a clear, low-friction CTA such as asking whether they have a current or upcoming requirement and offering to review specifications.
 
 Use only the facts supplied below.
-Company: {row.get('company_name','')}
+Company / page name: {row.get('company_name','')}
+Website: {row.get('website','')}
+Public social profile URL: {row.get('social_url','')}
+Public contact person: {row.get('contact_person','')}
 Country: {row.get('country','')}
 Industry: {row.get('industry','')}
 Potential product interest: {row.get('product_interest','')}
-Evidence: {row.get('evidence','')}
+Public profile description: {row.get('social_bio','')}
+Public evidence: {row.get('evidence','')}
+Discovery source: {row.get('source','')}
 Search query: {row.get('search_query','')}
 
 Return only:
