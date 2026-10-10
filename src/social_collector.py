@@ -388,6 +388,17 @@ def provider_chain(p, url):
         except Exception as e:
             errors.append(f"{name}:{e}")
             print(f"Social provider failed: {name} | {e}")
+            # If the Worker explicitly reports its daily cap, do not consume
+            # paid fallback-provider quota to bypass that configured safeguard.
+            error_text = str(e).lower()
+            if name == "CloudflareDeepBackup" and (
+                "cloudflare_http_429" in error_text
+                or "daily limit" in error_text
+                or "quota exceeded" in error_text
+                or "limit reached" in error_text
+            ):
+                print("Cloudflare daily cap detected; skipping paid provider fallbacks.")
+                return "", None, errors
 
     return "", None, errors
 
