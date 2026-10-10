@@ -126,7 +126,19 @@ def main():
         return
     rows = list(csv.DictReader(LEADS.open(encoding="utf-8")))
     existing = list(csv.DictReader(OUTREACH.open(encoding="utf-8"))) if OUTREACH.exists() else []
-    done = {r.get("website") for r in existing if r.get("website")}
+    def lead_key(row):
+        # Prefer stable, specific identifiers. Never use an empty website as a dedupe key.
+        for field in ("email", "website", "social_url", "linkedin"):
+            value = (row.get(field) or "").strip().lower()
+            if value:
+                return f"{field}:{value}"
+        company = (row.get("company_name") or "").strip().lower()
+        country = (row.get("country") or "").strip().lower()
+        if company:
+            return f"company:{company}|country:{country}"
+        return ""
+
+    done = {key for row in existing if (key := lead_key(row))}
     current_run_id = os.getenv("GITHUB_RUN_ID", "")
     if current_run_id:
         candidates = [r for r in rows if r.get("run_id") == current_run_id]
@@ -137,7 +149,9 @@ def main():
     new_rows = []
 
     for row in candidates[:OUTREACH_LIMIT_PER_RUN]:
-        if row.get("website") in done:
+        key = lead_key(row)
+        if key and key in done:
+            print(f"Outreach skipped: duplicate lead identity ({key[:120]})")
             continue
         message = make_message(row)
         if not message:
@@ -159,7 +173,8 @@ def main():
             "status": status,
             "run_id": row.get("run_id", current_run_id),
         })
-        done.add(row.get("website"))
+        if key:
+            done.add(key)
 
     all_rows = existing + new_rows
     with OUTREACH.open("w", newline="", encoding="utf-8") as f:
