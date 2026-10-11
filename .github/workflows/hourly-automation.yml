@@ -135,12 +135,11 @@ jobs:
 
           PY
 
-      - name: Collect social leads (AUTO rotates across four networks; hard cap one profile per run)
+      - name: Collect public social leads (native platform/provider discovery; hard cap one profile per run)
         env:
           SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
           APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
           SOCIALFETCH_API_KEY: ${{ secrets.SOCIALFETCH_API_KEY }}
-          YDC_API_KEY: ${{ secrets.YDC_API_KEY }}
           SOCIAL_DEEP_BACKUP_TOKEN: ${{ secrets.SOCIAL_DEEP_BACKUP_TOKEN }}
           SOCIAL_DEEP_BACKUP_URL: https://patient-moon-b87e.mohamadsbrfit760li.workers.dev
           SOCIAL_PLATFORM: ${{ inputs.social_platform || 'auto' }}
