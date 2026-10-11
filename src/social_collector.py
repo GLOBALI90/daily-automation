@@ -28,31 +28,16 @@ RUN_ID = os.getenv(
 NOW = datetime.now(timezone.utc).isoformat()
 
 PLATFORMS = ["linkedin", "instagram", "facebook", "x"]
+# AUTO only rotates platforms with a configured native discovery adapter.
+# LinkedIn remains manually selectable for a clear diagnostic, but is not
+# silently replaced by web search.
+AUTO_PLATFORMS = ["instagram", "facebook", "x"]
 
 ACTORS = {
     "linkedin": "harvestapi~linkedin-profile-scraper",
     "instagram": "apify~instagram-profile-scraper",
     "facebook": "apify~facebook-pages-scraper",
     "x": "apidojo~tweet-scraper",
-}
-
-QUERIES = {
-    "linkedin": [
-        'site:linkedin.com/in/ ("procurement manager" OR "purchasing manager" OR "sourcing manager") (petrochemical OR chemical OR steel OR petroleum) China',
-        'site:linkedin.com/in/ ("import manager" OR "procurement director" OR "purchase manager") (chemical OR steel OR energy) China'
-    ],
-    "instagram": [
-        'site:instagram.com/ ("petrochemical" OR "chemical" OR "steel") China company',
-        'site:instagram.com/ ("industrial" OR "manufacturer" OR "importer") China chemical steel'
-    ],
-    "facebook": [
-        'site:facebook.com/ "petrochemical" China company',
-        'site:facebook.com/ "chemical manufacturer" China'
-    ],
-    "x": [
-        'site:x.com/ ("petrochemical" OR "chemical") China company',
-        'site:x.com/ ("steel" OR "industrial") China manufacturer'
-    ]
 }
 
 FIELDS = [
@@ -767,8 +752,8 @@ def main():
     # AUTO rotates one network per UTC day so repeated manual triggers cannot
     # accidentally pin the automation to a single weekday-based network.
     day_of_year = datetime.now(timezone.utc).timetuple().tm_yday
-    p = PLATFORM if PLATFORM in PLATFORMS else PLATFORMS[
-        (day_of_year - 1) % len(PLATFORMS)
+    p = PLATFORM if PLATFORM in PLATFORMS else AUTO_PLATFORMS[
+        (day_of_year - 1) % len(AUTO_PLATFORMS)
     ]
     found = discover(p)
 
