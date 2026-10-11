@@ -21,13 +21,6 @@ CLOUDFLARE_URL = os.getenv(
     "https://patient-moon-b87e.mohamadsbrfit760li.workers.dev"
 ).strip().rstrip("/")
 CLOUDFLARE_TOKEN = os.getenv("SOCIAL_DEEP_BACKUP_TOKEN", "").strip()
-SEARXNG_URL = os.getenv("SEARXNG_URL", "").strip().rstrip("/")
-SEARXNG_FALLBACKS = [
-    "https://searxng.website",
-    "https://searxng.eshnetwork.space",
-    "https://search.mectov.my.id",
-]
-
 RUN_ID = os.getenv(
     "GITHUB_RUN_ID",
     datetime.now(timezone.utc).strftime("social-%Y%m%d%H%M%S")
@@ -69,7 +62,7 @@ FIELDS = [
     "search_query", "social_url", "platform", "username", "followers",
     "verified", "social_bio", "source_provider", "discovered_url",
     "profile_url_submitted", "profile_url_returned", "profile_fetch_status",
-    "profile_data_fields"
+    "profile_data_fields", "discovery_method"
 ]
 
 session = requests.Session()
@@ -164,106 +157,159 @@ def relevant_social_profile(platform, url, company, website, location, bio):
     return True
 
 
-def _searx_results(data, num=10):
-    if not isinstance(data, dict):
-        return []
-    return data.get("results") or []
+NATIVE_QUERIES = {
+    "linkedin": [
+        "chemical petrochemical steel procurement buyer China",
+        "industrial chemical manufacturer importer China",
+    ],
+    "instagram": [
+        "chemical manufacturer China",
+        "petrochemical industrial supplier China",
+    ],
+    "facebook": [
+        "chemical manufacturer China",
+        "petrochemical company China",
+    ],
+    "x": [
+        "chemical petrochemical steel industrial China",
+        "chemical importer manufacturer China",
+    ],
+}
+
+DISCOVERY_METHODS = {
+    "linkedin": "unsupported_native_search",
+    "instagram": "scrapecreators_instagram_native_search",
+    "facebook": "scrapecreators_facebook_ad_library_company_search",
+    "x": "apify_x_native_search",
+}
 
 
-def _searx_html_results(html, num=10):
-    urls = []
-    patterns = [
-        r'<a[^>]+class=["\'][^"\']*result_header[^"\']*["\'][^>]+href=["\'](https?://[^"\']+)',
-        r'<a[^>]+href=["\'](https?://[^"\']+)["\'][^>]+class=["\'][^"\']*result_header[^"\']*["\']',
-    ]
-    for pattern in patterns:
-        urls.extend(re.findall(pattern, html, flags=re.I))
-    out = []
-    seen = set()
-    for u in urls:
-        u = u.strip()
-        if u and u not in seen:
-            seen.add(u)
-            out.append({"url": u})
-            if len(out) >= num:
-                break
-    return out
-
-
-def you_search(q, num=10):
-    key = os.getenv("YDC_API_KEY", "").strip()
-    if not key:
-        raise RuntimeError("YDC_API_KEY missing")
+def _scrapecreators_get(path, params):
+    if not SCRAPECREATORS:
+        raise RuntimeError("SCRAPECREATORS_API_KEY missing for native social discovery")
     r = session.get(
-        "https://api.you.com/v1/search",
-        json={"query": q, "count": min(num, 100)},
-        headers={"X-API-Key": key, "Accept": "application/json", "Content-Type": "application/json"},
-        timeout=30,
+        "https://api.scrapecreators.com" + path,
+        headers={"x-api-key": SCRAPECREATORS, "Accept": "application/json"},
+        params=params,
+        timeout=45,
     )
     r.raise_for_status()
     data = r.json()
-    web_results = (data.get("results") or {}).get("web") or []
-    return [
-        {
-            "url": item.get("url", ""),
-            "title": item.get("title", ""),
-            "content": item.get("description", "") or item.get("snippet", ""),
-        }
-        for item in web_results[:num]
-    ]
+    if isinstance(data, dict) and data.get("success") is False:
+        raise RuntimeError("ScrapeCreators native discovery returned success=false")
+    return data
 
 
-def search(q):
-    # Prefer the configured You.com API; public SearXNG instances are frequently
-    # rate-limited. Keep SearXNG as a fallback rather than a single point of failure.
-    try:
-        results = you_search(q, 10)
-        if results:
-            print(f"You.com social discovery: results={len(results)}")
-            return results
-        print("You.com social discovery returned 0 results; falling back to SearXNG")
-    except Exception as exc:
-        print(f"You.com social discovery unavailable ({type(exc).__name__}); falling back to SearXNG")
+def _instagram_native_candidates(query):
+    data = _scrapecreators_get("/v1/instagram/search/profiles", {"query": query})
+    profiles = data.get("profiles") or (data.get("data") or {}).get("users") or []
+    out = []
+    for item in profiles:
+        if not isinstance(item, dict):
+            continue
+        username = val(item.get("username") or item.get("handle"))
+        url = val(item.get("url") or item.get("profile_url"))
+        if not url and username:
+            url = f"https://www.instagram.com/{username}/"
+        if not url:
+            continue
+        out.append({
+            "url": url,
+            "title": val(item.get("full_name") or item.get("name") or username),
+            "content": " ".join([
+                val(item.get("biography") or item.get("bio")),
+                val(item.get("category_name") or item.get("category")),
+                query,
+            ]),
+        })
+    return out
 
-    bases = []
-    if SEARXNG_URL:
-        bases.append(SEARXNG_URL)
-    bases.extend(x for x in SEARXNG_FALLBACKS if x not in bases)
 
-    last_error = None
-    for base in bases:
-        try:
-            r = session.get(
-                base + "/search",
-                params={"q": q, "format": "json", "categories": "general", "language": "en", "pageno": 1},
-                timeout=30,
-            )
-            if r.ok:
-                results = _searx_results(r.json(), 10)
-                if results:
-                    print(f"SearXNG discovery: {base} | results={len(results)}")
-                    return results
-            else:
-                last_error = RuntimeError(f"HTTP {r.status_code} from {base}")
-        except Exception as exc:
-            last_error = exc
+def _facebook_native_candidates(query):
+    # Search the public Facebook Ad Library's company/page index. This is
+    # platform-native public data, but it is not a general search of every Page.
+    data = _scrapecreators_get(
+        "/v1/facebook/adLibrary/search/companies", {"query": query}
+    )
+    items = data.get("searchResults") or data.get("results") or []
+    out = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        alias = val(item.get("page_alias") or item.get("pageAlias") or item.get("username"))
+        page_id = val(item.get("page_id") or item.get("pageId") or item.get("id"))
+        url = val(item.get("url") or item.get("page_url") or item.get("page_profile_uri"))
+        if not url and alias:
+            url = f"https://www.facebook.com/{alias}/"
+        if not url and page_id:
+            url = f"https://www.facebook.com/{page_id}"
+        if not url:
+            continue
+        out.append({
+            "url": url,
+            "title": val(item.get("page_name") or item.get("name") or alias),
+            "content": " ".join([
+                val(item.get("category") or item.get("category_name")),
+                query,
+            ]),
+        })
+    return out
 
-        # Try HTML only for instances that did not return JSON results.
-        try:
-            r = session.get(
-                base + "/search",
-                params={"q": q, "categories": "general", "language": "en", "pageno": 1},
-                timeout=30,
-            )
-            r.raise_for_status()
-            results = _searx_html_results(r.text, 10)
-            if results:
-                print(f"SearXNG HTML discovery: {base} | results={len(results)}")
-                return results
-        except Exception as exc:
-            last_error = exc
 
-    raise RuntimeError(f"Search discovery unavailable: You.com failed and SearXNG failed across {len(bases)} instances: {last_error}")
+def _x_native_candidates(query):
+    if not APIFY:
+        raise RuntimeError("APIFY_API_TOKEN missing for X native search")
+    # Search public X posts and extract author profile URLs from those results.
+    items = actor("x", {"searchTerms": [query], "maxItems": 10, "sort": "Latest"})
+    out = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        author = item.get("author") or item.get("user") or {}
+        if not isinstance(author, dict):
+            author = {}
+        core = (((item.get("core") or {}).get("user_results") or {}).get("result") or {})
+        legacy = core.get("legacy") if isinstance(core, dict) else {}
+        if not isinstance(legacy, dict):
+            legacy = {}
+        username = val(
+            author.get("userName") or author.get("username") or author.get("screen_name")
+            or item.get("authorUsername") or item.get("username")
+            or legacy.get("screen_name")
+        )
+        url = val(
+            author.get("url") or author.get("profileUrl") or author.get("profile_url")
+            or item.get("authorUrl") or item.get("profileUrl")
+        )
+        if not url and username:
+            url = f"https://x.com/{username}"
+        if not url:
+            continue
+        out.append({
+            "url": url,
+            "title": val(author.get("name") or item.get("authorName") or username),
+            "content": " ".join([
+                val(item.get("text") or item.get("fullText") or item.get("tweetText") or legacy.get("description")),
+                query,
+            ]),
+        })
+    return out
+
+
+def native_candidates(platform, query):
+    if platform == "instagram":
+        return _instagram_native_candidates(query)
+    if platform == "facebook":
+        return _facebook_native_candidates(query)
+    if platform == "x":
+        return _x_native_candidates(query)
+    # The available LinkedIn indexed-post endpoint uses Google Search, and
+    # LinkedIn's official member APIs are not approved for sales-prospect discovery.
+    # Do not disguise web discovery as native discovery.
+    raise RuntimeError(
+        "No configured native LinkedIn discovery adapter. The available indexed-post "
+        "endpoint uses Google Search, so it is intentionally excluded from this social-only collector."
+    )
 
 
 def social_candidate_score(platform, result, url):
@@ -273,37 +319,46 @@ def social_candidate_score(platform, result, url):
     industry_hits = sum(1 for term in INDUSTRY_TERMS if term in text)
     buyer_hits = sum(1 for term in BUYER_TERMS if term in text)
     china_hits = sum(1 for term in CHINA_SIGNALS if term in text)
-    # Search queries already constrain the target country and buyer roles.
-    # Search snippets often omit geography or buyer keywords even for relevant
-    # LinkedIn profiles, so require industry evidence plus at least one other
-    # signal here; the stricter profile-level relevance check still runs after
-    # fetching the profile.
     if not industry_hits or not (buyer_hits or china_hits):
         return 0
     return industry_hits * 4 + buyer_hits * 2 + china_hits
 
 
 def discover(p):
-    for q in QUERIES[p]:
+    last_error = None
+    for q in NATIVE_QUERIES[p]:
+        try:
+            results = native_candidates(p, q)
+        except Exception as exc:
+            last_error = exc
+            print(f"Native social discovery failed: platform={p}; method={DISCOVERY_METHODS[p]}; error={type(exc).__name__}: {exc}")
+            # Do not silently fall back to You.com/SearXNG from this collector.
+            if p == "linkedin":
+                break
+            continue
+
         ranked = []
         seen = set()
-        for item in search(q):
-            u = (item.get("url") or "").rstrip("/")
+        for item in results:
+            u = val(item.get("url")).rstrip("/")
             if not u or u in seen or not good(p, u):
                 continue
             seen.add(u)
             score = social_candidate_score(p, item, u)
             if score:
-                ranked.append((score, u, q))
+                ranked.append((score, u, q, DISCOVERY_METHODS[p]))
         if ranked:
             ranked.sort(key=lambda item: item[0], reverse=True)
             chosen = ranked[0]
             print(
-                f"Social discovery ranking: platform={p}; candidates={len(ranked)}; "
-                f"selected_score={chosen[0]}; url={chosen[1]}"
+                f"Native social discovery ranking: platform={p}; method={chosen[3]}; "
+                f"candidates={len(ranked)}; selected_score={chosen[0]}; url={chosen[1]}"
             )
-            return [(chosen[1], chosen[2])]
+            return [(chosen[1], chosen[2], chosen[3])]
+    if last_error:
+        print(f"Social discovery ended without candidates: platform={p}; last_error={type(last_error).__name__}: {last_error}")
     return []
+
 
 def get_json(url, headers=None, params=None, timeout=45):
     r = session.get(
@@ -747,14 +802,15 @@ def main():
         "failed": 0
     }
 
-    for url, query in found[:MAX_ITEMS]:
+    for url, query, discovery_method in found[:MAX_ITEMS]:
         print(
             "SOCIAL_SOURCE_AUDIT " + json.dumps({
                 "platform": p,
                 "discovered_url": url,
                 "profile_url_submitted": url,
                 "search_query": query,
-                "note": "Public-page URL submitted to the configured collector; no personal Facebook login is performed by this workflow."
+                "discovery_method": discovery_method,
+                "note": "Public profile/page URL submitted to the configured collector; no personal social account login is performed by this workflow."
             }, ensure_ascii=False)
         )
         provider, data, errors = provider_chain(p, url)
@@ -763,6 +819,7 @@ def main():
             provider_counts["failed"] += 1
             print("SOCIAL_FETCH_AUDIT " + json.dumps({
                 "platform": p,
+                "discovery_method": discovery_method,
                 "discovered_url": url,
                 "profile_url_submitted": url,
                 "profile_url_returned": "",
@@ -788,6 +845,7 @@ def main():
         )
         print("SOCIAL_FETCH_AUDIT " + json.dumps({
             "platform": p,
+            "discovery_method": discovery_method,
             "discovered_url": url,
             "profile_url_submitted": url,
             "profile_url_returned": returned_url,
@@ -834,6 +892,7 @@ def main():
             "run_id": RUN_ID,
             "collected_at": NOW,
             "search_query": query,
+            "discovery_method": discovery_method,
             "social_url": surl,
             "platform": p,
             "username": handle_from_url(surl),
@@ -858,7 +917,7 @@ def main():
         w.writerows(rows)
 
     print(
-        f"Social collection: {p}; discovered={len(found)}; added={added}; "
+        f"Social collection: {p}; discovery={DISCOVERY_METHODS[p]}; discovered={len(found)}; added={added}; "
         f"cap={MAX_ITEMS}; providers={json.dumps(provider_counts, ensure_ascii=False)}"
     )
 
