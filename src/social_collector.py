@@ -245,7 +245,7 @@ def _x_native_candidates(query):
     if not APIFY:
         raise RuntimeError("APIFY_API_TOKEN missing for X native search")
     # Search public X posts and extract author profile URLs from those results.
-    items = actor("x", {"searchTerms": [query], "maxItems": 10, "sort": "Latest"})
+    items = actor("x", {"searchTerms": [query], "maxItems": 50, "sort": "Latest"})
     out = []
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, dict):
