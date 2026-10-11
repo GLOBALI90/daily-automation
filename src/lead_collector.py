@@ -69,7 +69,7 @@ CHINA_INDUSTRIAL_ZONES = [
 FIELDS = [
     "company_name", "website", "country", "industry", "buyer_type",
     "product_interest", "contact_person", "email", "whatsapp", "phone",
-    "linkedin", "source", "evidence", "lead_score", "run_id", "collected_at", "search_query"
+    "linkedin", "source", "evidence", "lead_score", "run_id", "collected_at", "search_query", "discovery_method"
 ]
 
 HEADERS = {"User-Agent": "ROZHAN-Global-B2B-Research/1.0 (+https://www.rojanglobal.com)"}
