@@ -108,6 +108,20 @@ def resilient_searx_search(query, num=collector.RESULTS_PER_QUERY, exclude_domai
 
 
 def resilient_search(query, num=collector.RESULTS_PER_QUERY, exclude_domains=None):
+    # Prefer the configured You.com API. The previous wrapper replaced
+    # collector.search with SearXNG-only search, unintentionally bypassing
+    # You.com even when YDC_API_KEY was configured.
+    try:
+        results = collector.you_search(
+            query, num=num, exclude_domains=exclude_domains
+        )
+        if results:
+            print(f"You.com discovery: results={len(results)}")
+            return results, "You.com"
+        print("You.com discovery returned 0 results; falling back to SearXNG")
+    except Exception as exc:
+        print(f"You.com discovery unavailable ({type(exc).__name__}); falling back to SearXNG")
+
     results = resilient_searx_search(query, num, exclude_domains=exclude_domains)
     return results, "SearXNG"
 
