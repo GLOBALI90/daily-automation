@@ -236,9 +236,12 @@ def social_candidate_score(platform, result, url):
     industry_hits = sum(1 for term in INDUSTRY_TERMS if term in text)
     buyer_hits = sum(1 for term in BUYER_TERMS if term in text)
     china_hits = sum(1 for term in CHINA_SIGNALS if term in text)
-    # Avoid consuming a profile-fetch quota on unrelated pages that merely
-    # appeared in a broad social search result.
-    if not industry_hits or not buyer_hits or not china_hits:
+    # Search queries already constrain the target country and buyer roles.
+    # Search snippets often omit geography or buyer keywords even for relevant
+    # LinkedIn profiles, so require industry evidence plus at least one other
+    # signal here; the stricter profile-level relevance check still runs after
+    # fetching the profile.
+    if not industry_hits or not (buyer_hits or china_hits):
         return 0
     return industry_hits * 4 + buyer_hits * 2 + china_hits
 
