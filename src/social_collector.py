@@ -190,7 +190,41 @@ def _searx_html_results(html, num=10):
     return out
 
 
+def you_search(q, num=10):
+    key = os.getenv("YDC_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("YDC_API_KEY missing")
+    r = session.get(
+        "https://api.you.com/v1/search",
+        json={"query": q, "count": min(num, 100)},
+        headers={"X-API-Key": key, "Accept": "application/json", "Content-Type": "application/json"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    data = r.json()
+    web_results = (data.get("results") or {}).get("web") or []
+    return [
+        {
+            "url": item.get("url", ""),
+            "title": item.get("title", ""),
+            "content": item.get("description", "") or item.get("snippet", ""),
+        }
+        for item in web_results[:num]
+    ]
+
+
 def search(q):
+    # Prefer the configured You.com API; public SearXNG instances are frequently
+    # rate-limited. Keep SearXNG as a fallback rather than a single point of failure.
+    try:
+        results = you_search(q, 10)
+        if results:
+            print(f"You.com social discovery: results={len(results)}")
+            return results
+        print("You.com social discovery returned 0 results; falling back to SearXNG")
+    except Exception as exc:
+        print(f"You.com social discovery unavailable ({type(exc).__name__}); falling back to SearXNG")
+
     bases = []
     if SEARXNG_URL:
         bases.append(SEARXNG_URL)
@@ -209,9 +243,12 @@ def search(q):
                 if results:
                     print(f"SearXNG discovery: {base} | results={len(results)}")
                     return results
+            else:
+                last_error = RuntimeError(f"HTTP {r.status_code} from {base}")
         except Exception as exc:
             last_error = exc
 
+        # Try HTML only for instances that did not return JSON results.
         try:
             r = session.get(
                 base + "/search",
@@ -226,7 +263,7 @@ def search(q):
         except Exception as exc:
             last_error = exc
 
-    raise RuntimeError(f"SearXNG discovery unavailable across {len(bases)} instances: {last_error}")
+    raise RuntimeError(f"Search discovery unavailable: You.com failed and SearXNG failed across {len(bases)} instances: {last_error}")
 
 
 def social_candidate_score(platform, result, url):
