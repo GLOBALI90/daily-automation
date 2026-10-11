@@ -33,11 +33,18 @@ on:
         default: "1"
 
 
+  # Four scheduled runs per UTC day, spaced six hours apart.
+  # Keep aligned with the Cloudflare Worker cap of four Browser Run actions/day.
   schedule:
-    - cron: "0 9 * * *"
+    - cron: "0 0,6,12,18 * * *"
 
 permissions:
   contents: write
+
+# Prevent overlapping runs from racing the Worker KV daily action counter.
+concurrency:
+  group: rozhan-global-automation
+  cancel-in-progress: false
 
 jobs:
   run:
