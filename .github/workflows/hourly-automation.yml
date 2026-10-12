@@ -4,12 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       social_platform:
-        description: "Social network for this manual test"
+        description: "Supported native social network for this manual test"
         required: false
         type: choice
         options:
           - auto
-          - linkedin
           - facebook
           - x
         default: facebook
