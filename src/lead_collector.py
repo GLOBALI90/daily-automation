@@ -73,7 +73,7 @@ FIELDS = [
 ]
 
 HEADERS = {"User-Agent": "ROZHAN-Global-B2B-Research/1.0 (+https://www.rojanglobal.com)"}
-SOCIAL_DOMAINS = {"linkedin.com", "facebook.com", "x.com", "twitter.com", "instagram.com"}
+SOCIAL_DOMAINS = {"linkedin.com", "facebook.com", "x.com", "twitter.com"}
 EXCLUDED_DOMAINS = {
     "indeed.com", "glassdoor.com", "ziprecruiter.com", "jobleads.com", "bebee.com",
     "michaelpage.com", "westlaketalent.com", "talents.vaia.com", "claytonpersonnel.com",
