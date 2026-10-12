@@ -27,15 +27,14 @@ RUN_ID = os.getenv(
 )
 NOW = datetime.now(timezone.utc).isoformat()
 
-PLATFORMS = ["linkedin", "instagram", "facebook", "x"]
+PLATFORMS = ["linkedin", "facebook", "x"]
 # AUTO only rotates platforms with a configured native discovery adapter.
 # LinkedIn remains manually selectable for a clear diagnostic, but is not
 # silently replaced by web search.
-AUTO_PLATFORMS = ["instagram", "facebook", "x"]
+AUTO_PLATFORMS = ["facebook", "x"]
 
 ACTORS = {
     "linkedin": "harvestapi~linkedin-profile-scraper",
-    "instagram": "apify~instagram-profile-scraper",
     "facebook": "apify~facebook-pages-scraper",
     "x": "apidojo~tweet-scraper",
 }
@@ -83,7 +82,6 @@ def good(p, u):
     d = domain(u)
     ok = {
         "linkedin": {"linkedin.com"},
-        "instagram": {"instagram.com"},
         "facebook": {"facebook.com"},
         "x": {"x.com", "twitter.com"}
     }[p]
@@ -131,7 +129,7 @@ def infer_social_industry(company, website, location, bio):
 def relevant_social_profile(platform, url, company, website, location, bio):
     text = " ".join([url, company, website, location, bio]).lower()
     host = domain(url)
-    if not company or company.lower() in {"unknown", "none", "n/a", "facebook", "instagram", "linkedin"}:
+    if not company or company.lower() in {"unknown", "none", "n/a", "facebook", "linkedin"}:
         return False
     if not any(term in text for term in INDUSTRY_TERMS):
         return False
@@ -147,10 +145,6 @@ NATIVE_QUERIES = {
         "chemical petrochemical steel procurement buyer China",
         "industrial chemical manufacturer importer China",
     ],
-    "instagram": [
-        "chemical manufacturer China",
-        "petrochemical industrial supplier China",
-    ],
     "facebook": [
         "chemical manufacturer China",
         "petrochemical company China",
@@ -163,7 +157,6 @@ NATIVE_QUERIES = {
 
 DISCOVERY_METHODS = {
     "linkedin": "unsupported_native_search",
-    "instagram": "scrapecreators_instagram_native_search",
     "facebook": "scrapecreators_facebook_ad_library_company_search",
     "x": "apify_x_native_search",
 }
@@ -183,31 +176,6 @@ def _scrapecreators_get(path, params):
     if isinstance(data, dict) and data.get("success") is False:
         raise RuntimeError("ScrapeCreators native discovery returned success=false")
     return data
-
-
-def _instagram_native_candidates(query):
-    data = _scrapecreators_get("/v1/instagram/search/profiles", {"query": query})
-    profiles = data.get("profiles") or (data.get("data") or {}).get("users") or []
-    out = []
-    for item in profiles:
-        if not isinstance(item, dict):
-            continue
-        username = val(item.get("username") or item.get("handle"))
-        url = val(item.get("url") or item.get("profile_url"))
-        if not url and username:
-            url = f"https://www.instagram.com/{username}/"
-        if not url:
-            continue
-        out.append({
-            "url": url,
-            "title": val(item.get("full_name") or item.get("name") or username),
-            "content": " ".join([
-                val(item.get("biography") or item.get("bio")),
-                val(item.get("category_name") or item.get("category")),
-                query,
-            ]),
-        })
-    return out
 
 
 def _facebook_native_candidates(query):
@@ -282,8 +250,6 @@ def _x_native_candidates(query):
 
 
 def native_candidates(platform, query):
-    if platform == "instagram":
-        return _instagram_native_candidates(query)
     if platform == "facebook":
         return _facebook_native_candidates(query)
     if platform == "x":
@@ -372,17 +338,6 @@ def scrapecreators_profile(p, url):
             params={"url": url}
         )
 
-    if p == "instagram":
-        return get_json(
-            "https://api.scrapecreators.com/v1/instagram/profile",
-            headers=headers,
-            params={
-                "handle": handle_from_url(url),
-                "trim": "true",
-                "cache_max_age": "7d"
-            }
-        )
-
     if p == "facebook":
         return get_json(
             "https://api.scrapecreators.com/v1/facebook/profile",
@@ -409,12 +364,6 @@ def socialfetch_profile(p, url):
             "https://api.socialfetch.dev/v2/linkedin/profiles",
             headers=headers,
             params={"handle": handle}
-        )
-
-    if p == "instagram":
-        return get_json(
-            f"https://api.socialfetch.dev/v1/instagram/profiles/{quote(handle, safe='')}",
-            headers=headers
         )
 
     if p == "facebook":
@@ -454,8 +403,6 @@ def apify_profile(p, url):
             "profileScraperMode": "Profile details no email",
             "queries": [url]
         })
-    if p == "instagram":
-        return actor(p, {"usernames": [handle_from_url(url)]})
     if p == "facebook":
         return actor(p, {"startUrls": [{"url": url}]})
     return actor(p, {
@@ -655,16 +602,6 @@ def normalize_provider(p, provider, data, fallback):
                 val(x.get("name")), "", "", val(x.get("about")),
                 val(x.get("followers")), val(x.get("verified")), fallback
             )
-        if p == "instagram":
-            u = x.get("data", {}).get("user", {}) if isinstance(x.get("data"), dict) else {}
-            return (
-                val(u.get("full_name") or u.get("username")),
-                val(u.get("external_url")), "",
-                val(u.get("full_name") or u.get("username")),
-                "", "", val(u.get("biography")),
-                val((u.get("edge_followed_by") or {}).get("count")),
-                val(u.get("is_verified")), fallback
-            )
         if p == "facebook":
             return (
                 val(x.get("name")), val(x.get("website")), val(x.get("address")),
@@ -716,15 +653,6 @@ def normalize_provider(p, provider, data, fallback):
             val(x.get("verified")), val(x.get("linkedinUrl")) or fallback
         )
 
-    if p == "instagram":
-        bio = val(x.get("biography") or x.get("bio"))
-        return (
-            val(x.get("fullName") or x.get("name") or x.get("username")),
-            val(x.get("externalUrl") or x.get("website")), val(x.get("location")),
-            val(x.get("fullName") or x.get("username")), "", "", bio,
-            val(x.get("followersCount") or x.get("followers")),
-            val(x.get("verified")), val(x.get("url")) or fallback
-        )
 
     if p == "facebook":
         bio = val(x.get("description") or x.get("about"))
