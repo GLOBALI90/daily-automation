@@ -396,31 +396,67 @@ def collect():
     existing_domains = load_existing_domains()
     recent_excludes = load_recent_domains(limit=450)
     queries = plan_queries(existing_domains)
-    region, _ = pick_china_region()
-    for q in queries:
+    print(
+        "LEAD_COLLECTION_CONFIG " + json.dumps({
+            "queries_planned": len(queries),
+            "existing_domains": len(existing_domains),
+            "recent_domains_excluded": len(recent_excludes),
+            "target_leads": TARGET_LEADS_PER_RUN,
+            "results_per_query": RESULTS_PER_QUERY,
+        }, ensure_ascii=False)
+    )
+    for query_index, q in enumerate(queries, start=1):
         results, source = search(q, num=RESULTS_PER_QUERY, exclude_domains=recent_excludes)
+        stats = {
+            "results_returned": len(results),
+            "invalid_url": 0,
+            "duplicate_in_run": 0,
+            "already_stored_domain": 0,
+            "filtered_not_target": 0,
+            "accepted": 0,
+        }
+        print(
+            f"LEAD_QUERY_AUDIT query={query_index} source={source} "
+            f"results={len(results)} query={q}"
+        )
         for item in results:
             link = str(item.get("url", "")).strip()
             title = str(item.get("title", "")).strip()
             snippet = str(item.get("content", "")).strip()
             d = domain(link)
-            if not d or d in seen or d in existing_domains or looks_like_reject(title, link, snippet, query=q):
+            if not d or not title:
+                stats["invalid_url"] += 1
                 continue
+            if d in seen:
+                stats["duplicate_in_run"] += 1
+                continue
+            if d in existing_domains:
+                stats["already_stored_domain"] += 1
+                continue
+            if looks_like_reject(title, link, snippet, query=q):
+                stats["filtered_not_target"] += 1
+                continue
+
             seen.add(d)
             text = f"{title} {snippet}"
             contacts = extract_contacts(link)
+            product = infer_product(text)
             rows.append({
-                "company_name": title[:200], "website": link, "country": TARGET_COUNTRY, "industry": infer_product(text),
-                "buyer_type": "Potential buyer / industrial consumer", "product_interest": infer_product(text),
+                "company_name": title[:200], "website": link, "country": TARGET_COUNTRY, "industry": product,
+                "buyer_type": "Potential buyer / industrial consumer", "product_interest": product,
                 "contact_person": "", "email": contacts["email"], "whatsapp": contacts["whatsapp"], "phone": contacts["phone"],
                 "linkedin": link if "linkedin.com" in link else "", "source": source, "evidence": snippet[:500],
                 "lead_score": "1" if contacts["email"] or contacts["phone"] or contacts["whatsapp"] else "0",
                 "run_id": RUN_ID, "collected_at": COLLECTED_AT, "search_query": q,
             })
+            stats["accepted"] += 1
             if len(rows) >= TARGET_LEADS_PER_RUN:
+                print("LEAD_FILTER_AUDIT " + json.dumps(stats, ensure_ascii=False))
+                print(f"LEAD_COLLECTION_TOTAL accepted={len(rows)} target={TARGET_LEADS_PER_RUN}")
                 return rows
+        print("LEAD_FILTER_AUDIT " + json.dumps(stats, ensure_ascii=False))
+    print(f"LEAD_COLLECTION_TOTAL accepted={len(rows)} target={TARGET_LEADS_PER_RUN}")
     return rows
-
 
 def main():
     rows = collect()
