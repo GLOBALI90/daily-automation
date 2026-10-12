@@ -142,8 +142,7 @@ def relevant_social_profile(platform, url, company, website, location, bio):
 
 NATIVE_QUERIES = {
     "linkedin": [
-        "chemical petrochemical steel procurement buyer China",
-        "industrial chemical manufacturer importer China",
+        'site:linkedin.com/in procurement chemical petrochemical steel China',
     ],
     "facebook": [
         "chemical manufacturer China",
