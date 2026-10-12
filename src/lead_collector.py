@@ -133,7 +133,7 @@ CHINA_SIGNALS = (
     "xiamen", "quanzhou", "fuzhou", "wuhan", "yichang"
 )
 
-def looks_like_reject(title, url, snippet):
+def looks_like_reject(title, url, snippet, query=""):
     d = domain(url).lower().split(":")[0]
     if not d or not title.strip():
         return True
@@ -146,16 +146,24 @@ def looks_like_reject(title, url, snippet):
     path_text = urlparse(url).path.lower()
     if any(marker in path_text for marker in (
         "/wiki/", "/tourism", "/tour/", "/forum/", "/forums/", "/community/",
-        "/watch", "/video", "/reel/", "/profile/", "/search"
+        "/watch", "/video", "/reel/", "/profile/", "/search", "/jobs/", "/careers/"
     )):
         return True
 
-    # Do not qualify a generic article merely because its snippet mentions industry.
-    text = f"{title} {snippet}".lower()
-    if any(re.search(r"\b" + re.escape(word) + r"\b", text) for word in EXCLUDED_WORDS):
+    # Reject editorial/recruitment results based primarily on their title/path,
+    # not on incidental words in a company's descriptive snippet.
+    title_reject = {
+        "job", "jobs", "career", "careers", "hiring", "vacancy", "vacancies",
+        "employment", "recruitment", "article", "blog", "guide", "directory",
+        "email list", "course", "webinar", "press release", "news", "magazine",
+        "market report", "supplier directory", "top suppliers", "list of"
+    }
+    if any(re.search(r"\\b" + re.escape(word) + r"\\b", title_text) for word in title_reject):
         return True
     if any(word in title_text for word in NON_COMPANY_TITLE_WORDS):
         return True
+
+    text = f"{title} {snippet}".lower()
     if not any(term in text for term in INDUSTRY_TERMS):
         return True
 
@@ -168,7 +176,11 @@ def looks_like_reject(title, url, snippet):
     )
     if not any(signal in text for signal in strong_buyer_signals):
         return True
-    if not d.endswith(".cn") and not any(signal in text for signal in CHINA_SIGNALS):
+
+    # A China-focused search query is itself useful geographic context: many
+    # legitimate .com company pages do not repeat "China" in their snippets.
+    query_context = f"{query} {text}".lower()
+    if not d.endswith(".cn") and not any(signal in query_context for signal in CHINA_SIGNALS):
         return True
     return False
 
