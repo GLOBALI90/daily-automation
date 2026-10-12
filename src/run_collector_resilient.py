@@ -1,4 +1,5 @@
 import csv
+from html import unescape as html_unescape
 import os
 import re
 import time
@@ -28,25 +29,46 @@ def _query_variants(query):
 
 
 def _html_results(html, num):
-    urls = []
-    patterns = [
-        r'<a[^>]+class=["\'][^"\']*result_header[^"\']*["\'][^>]+href=["\'](https?://[^"\']+)',
-        r'<a[^>]+href=["\'](https?://[^"\']+)["\'][^>]+class=["\'][^"\']*result_header[^"\']*["\']',
-    ]
-    for pattern in patterns:
-        urls.extend(re.findall(pattern, html, flags=re.I))
-
+    # Extract both destination and visible result text. Returning URL-only
+    # entries made every HTML-fallback result fail the lead collector's
+    # required-title/relevance checks.
     out = []
     seen = set()
-    for u in urls:
-        u = u.strip()
-        if u and u not in seen:
-            seen.add(u)
-            out.append({"url": u, "title": "", "content": ""})
-            if len(out) >= num:
-                break
-    return out
+    articles = re.findall(r"<article\b.*?</article>", html, flags=re.I | re.S)
+    if not articles:
+        articles = [html]
 
+    for block in articles:
+        anchors = re.findall(
+            r"<a\b(?=[^>]*class=[\"'][^\"']*result_header[^\"']*[\"'])([^>]*)>(.*?)</a>",
+            block,
+            flags=re.I | re.S,
+        )
+        for attrs, inner in anchors:
+            href_match = re.search(r"href=[\"'](https?://[^\"']+)", attrs, flags=re.I)
+            if not href_match:
+                continue
+            url = href_match.group(1).strip()
+            if not url or url in seen:
+                continue
+            title = re.sub(r"<[^>]+>", " ", inner)
+            title = re.sub(r"\s+", " ", html_unescape(title)).strip()
+            content_match = re.search(
+                r"<(?:p|div)[^>]*class=[\"'][^\"']*(?:result-content|content|description)[^\"']*[\"'][^>]*>(.*?)</(?:p|div)>",
+                block,
+                flags=re.I | re.S,
+            )
+            snippet = ""
+            if content_match:
+                snippet = re.sub(r"<[^>]+>", " ", content_match.group(1))
+                snippet = re.sub(r"\s+", " ", html_unescape(snippet)).strip()
+            if not title:
+                continue
+            seen.add(url)
+            out.append({"url": url, "title": title, "content": snippet})
+            if len(out) >= num:
+                return out
+    return out
 
 def resilient_searx_search(query, num=collector.RESULTS_PER_QUERY, exclude_domains=None):
     bases = []
