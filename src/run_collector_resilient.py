@@ -78,9 +78,9 @@ def resilient_searx_search(query, num=collector.RESULTS_PER_QUERY, exclude_domai
     bases.extend(x for x in SEARXNG_FALLBACKS if x not in bases)
 
     last_error = None
-    # Bound fallback discovery time so a slow public instance cannot consume
+    # Bound fallback discovery time so slow public instances cannot consume
     # the entire GitHub Actions job timeout. This is a per-query budget.
-    deadline = time.monotonic() + 45
+    deadline = time.monotonic() + 30
 
     for variant in _query_variants(query):
         for base in bases:
@@ -136,9 +136,9 @@ def resilient_searx_search(query, num=collector.RESULTS_PER_QUERY, exclude_domai
                 last_error = exc
 
     if time.monotonic() >= deadline:
-        print("SearXNG fallback reached the 45-second per-query time budget")
+        print("SearXNG fallback reached the 30-second per-query time budget")
     raise RuntimeError(
-        f"SearXNG discovery unavailable within the bounded search budget across {len(bases)} instances: {last_error}"
+        f"SearXNG discovery unavailable within the bounded 30-second search budget across {len(bases)} instances: {last_error}"
     )
 
 
