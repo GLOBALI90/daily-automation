@@ -253,43 +253,68 @@ def _x_native_candidates(query):
 
 
 def _linkedin_indexed_candidates(query):
-    """Find only publicly indexed LinkedIn profile URLs using configured search APIs."""
+    """Find public LinkedIn URLs from search indexes only; never fetch LinkedIn profiles."""
     import lead_collector as search_provider
 
-    search_query = (
-        'site:linkedin.com/in/ ("procurement" OR "purchasing" OR "sourcing" OR "buyer") '
-        '(chemical OR petrochemical OR steel OR industrial) China ' + query
-    )
-    try:
-        results = search_provider.you_search(search_query, num=10)
-        provider = "You.com"
-    except Exception as primary_error:
-        print(f"LinkedIn indexed search primary failed: {type(primary_error).__name__}; trying configured SearXNG")
-        results = search_provider.searx_search(search_query, num=10)
-        provider = "SearXNG"
-
+    query_variants = [
+        'site:linkedin.com/in procurement chemicals China ' + query,
+        'site:linkedin.com/in "purchasing" industrial China',
+        'site:linkedin.com/in petrochemical buyer China',
+    ]
     out = []
-    for item in results if isinstance(results, list) else []:
-        if not isinstance(item, dict):
-            continue
-        url = val(item.get("url"))
-        if not url:
-            continue
-        title = val(item.get("title"))
-        snippet = val(item.get("content") or item.get("snippet") or item.get("description"))
-        LINKEDIN_SEARCH_RESULTS[url.rstrip("/")] = {
-            "title": title,
-            "snippet": snippet,
-            "search_provider": provider,
-        }
-        out.append({
-            "url": url,
-            "title": title,
-            "content": " ".join([snippet, query]),
-            "search_provider": provider,
-        })
-    return out
+    seen = set()
+    last_error = None
 
+    for search_query in query_variants:
+        results = []
+        provider = ""
+        try:
+            results = search_provider.you_search(search_query, num=10)
+            provider = "You.com"
+        except Exception as primary_error:
+            last_error = primary_error
+            print(f"LinkedIn indexed search via You.com failed: {type(primary_error).__name__}; trying SearXNG fallbacks")
+            try:
+                # Reuse the repository's bounded SearXNG fallback chain.
+                from run_collector_resilient import resilient_searx_search
+                results = resilient_searx_search(search_query, num=10)
+                provider = "SearXNG"
+            except Exception as fallback_error:
+                last_error = fallback_error
+                print(f"LinkedIn indexed search fallback failed: {type(fallback_error).__name__}: {fallback_error}")
+                continue
+
+        for item in results if isinstance(results, list) else []:
+            if not isinstance(item, dict):
+                continue
+            url = val(item.get("url")).split("?")[0].rstrip("/")
+            if not url or "linkedin.com" not in domain(url).lower():
+                continue
+            path = urlparse(url).path.lower()
+            if not (path.startswith("/in/") or path.startswith("/company/")):
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            title = val(item.get("title"))
+            snippet = val(item.get("content") or item.get("snippet") or item.get("description"))
+            LINKEDIN_SEARCH_RESULTS[url] = {
+                "title": title,
+                "snippet": snippet,
+                "search_provider": provider,
+            }
+            out.append({
+                "url": url,
+                "title": title,
+                "content": " ".join([snippet, query]),
+                "search_provider": provider,
+            })
+        if out:
+            break
+
+    if not out and last_error:
+        print(f"LinkedIn indexed search ended without results: {type(last_error).__name__}: {last_error}")
+    return out
 
 def native_candidates(platform, query):
     if platform == "facebook":
