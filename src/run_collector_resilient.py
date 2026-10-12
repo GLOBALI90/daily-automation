@@ -78,9 +78,16 @@ def resilient_searx_search(query, num=collector.RESULTS_PER_QUERY, exclude_domai
     bases.extend(x for x in SEARXNG_FALLBACKS if x not in bases)
 
     last_error = None
+    # Bound fallback discovery time so a slow public instance cannot consume
+    # the entire GitHub Actions job timeout. This is a per-query budget.
+    deadline = time.monotonic() + 45
 
     for variant in _query_variants(query):
         for base in bases:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            request_timeout = max(1, min(8, remaining))
             # Prefer JSON when the instance enables it; public instances may
             # disable JSON, so fall back to the normal HTML result page.
             try:
@@ -94,7 +101,7 @@ def resilient_searx_search(query, num=collector.RESULTS_PER_QUERY, exclude_domai
                         "pageno": 1,
                     },
                     headers=ORIGINAL_HEADERS,
-                    timeout=30,
+                    timeout=request_timeout,
                 )
                 if r.ok:
                     results = r.json().get("results", [])[:num]
@@ -104,6 +111,10 @@ def resilient_searx_search(query, num=collector.RESULTS_PER_QUERY, exclude_domai
             except Exception as exc:
                 last_error = exc
 
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            request_timeout = max(1, min(8, remaining))
             try:
                 r = requests.get(
                     base + "/search",
@@ -114,7 +125,7 @@ def resilient_searx_search(query, num=collector.RESULTS_PER_QUERY, exclude_domai
                         "pageno": 1,
                     },
                     headers=ORIGINAL_HEADERS,
-                    timeout=30,
+                    timeout=request_timeout,
                 )
                 r.raise_for_status()
                 results = _html_results(r.text, num)
@@ -124,8 +135,10 @@ def resilient_searx_search(query, num=collector.RESULTS_PER_QUERY, exclude_domai
             except Exception as exc:
                 last_error = exc
 
+    if time.monotonic() >= deadline:
+        print("SearXNG fallback reached the 45-second per-query time budget")
     raise RuntimeError(
-        f"SearXNG discovery unavailable across {len(bases)} instances: {last_error}"
+        f"SearXNG discovery unavailable within the bounded search budget across {len(bases)} instances: {last_error}"
     )
 
 
