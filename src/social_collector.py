@@ -31,7 +31,7 @@ PLATFORMS = ["linkedin", "facebook", "x"]
 # AUTO only rotates platforms with a configured native discovery adapter.
 # LinkedIn remains manually selectable for a clear diagnostic, but is not
 # silently replaced by web search.
-AUTO_PLATFORMS = ["facebook", "x"]
+AUTO_PLATFORMS = ["facebook", "x", "linkedin"]
 
 ACTORS = {
     "linkedin": "harvestapi~linkedin-profile-scraper",
@@ -156,7 +156,7 @@ NATIVE_QUERIES = {
 }
 
 DISCOVERY_METHODS = {
-    "linkedin": "unsupported_native_search",
+    "linkedin": "public_search_engine_indexed_linkedin_profiles",
     "facebook": "scrapecreators_facebook_ad_library_company_search",
     "x": "apify_x_native_search",
 }
@@ -249,18 +249,51 @@ def _x_native_candidates(query):
     return out
 
 
+def _linkedin_indexed_candidates(query):
+    """Find only publicly indexed LinkedIn profile URLs using configured search APIs."""
+    import lead_collector as search_provider
+
+    search_query = (
+        'site:linkedin.com/in/ ("procurement" OR "purchasing" OR "sourcing" OR "buyer") '
+        '(chemical OR petrochemical OR steel OR industrial) China ' + query
+    )
+    try:
+        results = search_provider.you_search(search_query, num=10)
+        provider = "You.com"
+    except Exception as primary_error:
+        print(f"LinkedIn indexed search primary failed: {type(primary_error).__name__}; trying configured SearXNG")
+        results = search_provider.searx_search(search_query, num=10)
+        provider = "SearXNG"
+
+    out = []
+    for item in results if isinstance(results, list) else []:
+        if not isinstance(item, dict):
+            continue
+        url = val(item.get("url"))
+        if not url:
+            continue
+        out.append({
+            "url": url,
+            "title": val(item.get("title")),
+            "content": " ".join([
+                val(item.get("content") or item.get("snippet") or item.get("description")),
+                query,
+            ]),
+            "search_provider": provider,
+        })
+    return out
+
+
 def native_candidates(platform, query):
     if platform == "facebook":
         return _facebook_native_candidates(query)
     if platform == "x":
         return _x_native_candidates(query)
-    # The available LinkedIn indexed-post endpoint uses Google Search, and
-    # LinkedIn's official member APIs are not approved for sales-prospect discovery.
-    # Do not disguise web discovery as native discovery.
-    raise RuntimeError(
-        "No configured native LinkedIn discovery adapter. The available indexed-post "
-        "endpoint uses Google Search, so it is intentionally excluded from this social-only collector."
-    )
+    if platform == "linkedin":
+        # Public search-index results only; no LinkedIn login, session cookies,
+        # CAPTCHA bypass, or private/member-only data access.
+        return _linkedin_indexed_candidates(query)
+    raise ValueError(f"Unsupported social platform: {platform}")
 
 
 def social_candidate_score(platform, result, url):
@@ -712,12 +745,12 @@ def normalize_provider(p, provider, data, fallback):
 
 
 def main():
-    # AUTO rotates one network per UTC day so repeated manual triggers cannot
-    # accidentally pin the automation to a single weekday-based network.
-    day_of_year = datetime.now(timezone.utc).timetuple().tm_yday
-    p = PLATFORM if PLATFORM in PLATFORMS else AUTO_PLATFORMS[
-        (day_of_year - 1) % len(AUTO_PLATFORMS)
-    ]
+    # Four scheduled runs/day at 00, 06, 12, and 18 UTC. Allocate 2 Facebook,
+    # #1 X, and #1 LinkedIn; one profile per run shares the Worker cap of 4/day.
+    utc_hour = datetime.now(timezone.utc).hour
+    scheduled_slot = min(3, utc_hour // 6)
+    auto_schedule = ["facebook", "x", "linkedin", "facebook"]
+    p = PLATFORM if PLATFORM in PLATFORMS else auto_schedule[scheduled_slot]
     found = discover(p)
 
     if not found:
