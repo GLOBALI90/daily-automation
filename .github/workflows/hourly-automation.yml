@@ -10,7 +10,6 @@ on:
         options:
           - auto
           - linkedin
-          - instagram
           - facebook
           - x
         default: facebook
