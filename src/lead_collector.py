@@ -158,7 +158,7 @@ def looks_like_reject(title, url, snippet, query=""):
         "email list", "course", "webinar", "press release", "news", "magazine",
         "market report", "supplier directory", "top suppliers", "list of"
     }
-    if any(re.search(r"\\b" + re.escape(word) + r"\\b", title_text) for word in title_reject):
+    if any(re.search(r"\b" + re.escape(word) + r"\b", title_text) for word in title_reject):
         return True
     if any(word in title_text for word in NON_COMPANY_TITLE_WORDS):
         return True
