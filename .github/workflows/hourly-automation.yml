@@ -17,12 +17,12 @@ on:
         description: "Actually send outreach emails to qualified leads with public business email addresses"
         required: false
         type: boolean
-        default: true
+        default: false
       send_whatsapp:
         description: "Actually send WhatsApp outreach through WAHA to qualified leads with public international numbers"
         required: false
         type: boolean
-        default: true
+        default: false
       social_max_items:
         description: "Hard-capped at one profile per run to respect the Cloudflare Worker daily limit"
         required: false
