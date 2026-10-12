@@ -64,6 +64,9 @@ jobs:
       - name: Validate Python syntax
         run: python -m py_compile src/*.py
 
+      - name: Test social provider fallback and response quality
+        run: python -m unittest discover -s tests -v
+
       - name: Validate Gemini credentials and model before collection
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
