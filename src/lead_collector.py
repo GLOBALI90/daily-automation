@@ -352,7 +352,9 @@ def extract_contacts(url):
     if not url or d in SOCIAL_DOMAINS:
         return result
     try:
-        r = requests.get(url, headers=HEADERS, timeout=20, allow_redirects=True)
+        # Contact enrichment is best-effort: keep each lead bounded so a slow
+        # target website cannot stall the whole collection run.
+        r = requests.get(url, headers=HEADERS, timeout=6, allow_redirects=True)
         r.raise_for_status()
         html = r.text[:500_000]
         base = r.url
@@ -371,10 +373,10 @@ def extract_contacts(url):
     if phones:
         result["phone"] = re.sub(r"\s+", " ", phones[0]).strip()
     if not result["email"]:
-        for path in ("/contact", "/contact-us", "/contacts"):
+        for path in ("/contact", "/contact-us"):
             try:
                 contact_url = urljoin(base, path)
-                cr = requests.get(contact_url, headers=HEADERS, timeout=15, allow_redirects=True)
+                cr = requests.get(contact_url, headers=HEADERS, timeout=3, allow_redirects=True)
                 if not cr.ok:
                     continue
                 chtml = cr.text[:300_000]
