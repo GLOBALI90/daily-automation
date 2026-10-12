@@ -102,6 +102,9 @@ jobs:
         run: python src/social_collector.py
 
       - name: Collect leads with Gemini-planned search
+        # A manual network-specific test should isolate that network instead of
+        # failing the run because the unrelated general lead collector found no fresh leads.
+        if: github.event_name != 'workflow_dispatch' || inputs.social_platform == 'auto'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: gemini-3.8-flash
