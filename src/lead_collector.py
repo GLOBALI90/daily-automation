@@ -404,7 +404,7 @@ def collect():
             title = str(item.get("title", "")).strip()
             snippet = str(item.get("content", "")).strip()
             d = domain(link)
-            if not d or d in seen or d in existing_domains or looks_like_reject(title, link, snippet):
+            if not d or d in seen or d in existing_domains or looks_like_reject(title, link, snippet, query=q):
                 continue
             seen.add(d)
             text = f"{title} {snippet}"
