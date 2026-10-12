@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import requests
-from google import genai
+from gemini_utils import generate_text
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPANY = json.loads((ROOT / "config/company.json").read_text(encoding="utf-8"))
@@ -253,9 +253,7 @@ Use negative terms such as -jobs -careers -hiring -article -blog -directory -lis
 Previously used domains that MUST be avoided: {excluded_text}
 Return ONLY a JSON array of 3 strings."""
     try:
-        client = genai.Client(api_key=key)
-        response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-        text = (response.text or "").strip()
+        text = generate_text(prompt, api_key=key, model=GEMINI_MODEL)
         if not text:
             raise RuntimeError("Gemini returned an empty response")
         start, end = text.find("["), text.rfind("]")
