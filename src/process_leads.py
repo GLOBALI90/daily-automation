@@ -8,7 +8,7 @@ from email.message import EmailMessage
 from pathlib import Path
 
 import requests
-from google import genai
+from gemini_utils import generate_text
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPANY = json.loads((ROOT / "config/company.json").read_text(encoding="utf-8"))
@@ -27,9 +27,7 @@ def llm(prompt):
         print("Gemini provider skipped: GEMINI_API_KEY is not configured")
         return ""
     try:
-        client = genai.Client(api_key=key)
-        response = client.models.generate_content(model=model, contents=prompt)
-        text = (response.text or "").strip()
+        text = generate_text(prompt, api_key=key, model=model)
         if not text:
             print("Gemini provider failed: empty response")
             return ""
