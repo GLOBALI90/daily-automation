@@ -467,6 +467,15 @@ def provider_chain(p, url):
                         f"fields={json.dumps(extracted, ensure_ascii=False)}"
                     )
                     continue
+                if not relevant_social_profile(
+                    p, normalized[9] or url, company, web, loc, bio
+                ):
+                    errors.append(f"{name}:profile_not_relevant_to_target")
+                    print(
+                        f"Social provider response rejected as irrelevant: {name}; "
+                        f"platform={p}; fields={json.dumps(extracted, ensure_ascii=False)}"
+                    )
+                    continue
             except Exception as exc:
                 errors.append(f"{name}:normalization_error:{type(exc).__name__}")
                 print(f"Social provider normalization failed: {name} | {type(exc).__name__}: {exc}")
