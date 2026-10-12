@@ -252,6 +252,55 @@ def _x_native_candidates(query):
     return out
 
 
+def _decodo_google_search(query):
+    """Use the configured Decodo search API for indexed search results only."""
+    key = os.getenv("DECODO_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("DECODO_API_KEY missing")
+    auth = key if key.lower().startswith("basic ") else "Basic " + key
+    response = session.post(
+        "https://scraper-api.decodo.com/v2/scrape",
+        headers={
+            "Authorization": auth,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        json={
+            "target": "google_search",
+            "query": query,
+            "geo": "China",
+            "parse": True,
+            "headless": "html",
+        },
+        timeout=35,
+    )
+    response.raise_for_status()
+    payload = response.json()
+
+    def find_organic(node):
+        if isinstance(node, dict):
+            organic = node.get("organic")
+            if isinstance(organic, list):
+                return organic
+            for value in node.values():
+                found = find_organic(value)
+                if found is not None:
+                    return found
+        elif isinstance(node, list):
+            for value in node:
+                found = find_organic(value)
+                if found is not None:
+                    return found
+        return None
+
+    organic = find_organic(payload) or []
+    return [{
+        "url": item.get("url", ""),
+        "title": item.get("title", ""),
+        "content": item.get("desc", "") or item.get("snippet", ""),
+    } for item in organic if isinstance(item, dict)]
+
+
 def _linkedin_indexed_candidates(query):
     """Find public LinkedIn URLs from search indexes only; never fetch LinkedIn profiles."""
     import lead_collector as search_provider
@@ -269,20 +318,26 @@ def _linkedin_indexed_candidates(query):
         results = []
         provider = ""
         try:
-            results = search_provider.you_search(search_query, num=10)
-            provider = "You.com"
-        except Exception as primary_error:
-            last_error = primary_error
-            print(f"LinkedIn indexed search via You.com failed: {type(primary_error).__name__}; trying SearXNG fallbacks")
+            results = _decodo_google_search(search_query)
+            provider = "Decodo Google Search"
+        except Exception as decodo_error:
+            last_error = decodo_error
+            print(f"LinkedIn indexed search via Decodo failed: {type(decodo_error).__name__}; trying You.com")
             try:
-                # Reuse the repository's bounded SearXNG fallback chain.
-                from run_collector_resilient import resilient_searx_search
-                results = resilient_searx_search(search_query, num=10)
-                provider = "SearXNG"
-            except Exception as fallback_error:
-                last_error = fallback_error
-                print(f"LinkedIn indexed search fallback failed: {type(fallback_error).__name__}: {fallback_error}")
-                continue
+                results = search_provider.you_search(search_query, num=10)
+                provider = "You.com"
+            except Exception as primary_error:
+                last_error = primary_error
+                print(f"LinkedIn indexed search via You.com failed: {type(primary_error).__name__}; trying SearXNG fallbacks")
+                try:
+                    # Reuse the repository's bounded SearXNG fallback chain.
+                    from run_collector_resilient import resilient_searx_search
+                    results = resilient_searx_search(search_query, num=10)
+                    provider = "SearXNG"
+                except Exception as fallback_error:
+                    last_error = fallback_error
+                    print(f"LinkedIn indexed search fallback failed: {type(fallback_error).__name__}: {fallback_error}")
+                    continue
 
         for item in results if isinstance(results, list) else []:
             if not isinstance(item, dict):
