@@ -435,8 +435,9 @@ def cloudflare_profile(p, url):
 def provider_chain(p, url):
     errors = []
 
-    # Primary: our Cloudflare Worker. Only fall through when it fails/returns empty.
-    # This keeps paid/provider quotas largely untouched during healthy runs.
+    # A non-empty HTTP response is not necessarily a successful profile fetch.
+    # Require a company/profile name plus at least one substantive profile field
+    # before accepting a provider; otherwise continue to the next adapter.
     providers = [
         ("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)),
         ("ScrapeCreators", lambda: scrapecreators_profile(p, url)),
@@ -447,15 +448,40 @@ def provider_chain(p, url):
     for name, fn in providers:
         try:
             data = fn()
-            if data:
-                print(f"Social provider success: {name}")
-                return name, data, errors
-            errors.append(f"{name}:empty")
+            if not data:
+                errors.append(f"{name}:empty")
+                print(f"Social provider returned empty response: {name}")
+                continue
+
+            try:
+                normalized = normalize_provider(p, name, data, url)
+                company, web, loc, contact, email, phone, bio, followers, verified, _ = normalized
+                extracted = profile_field_names(
+                    company, web, loc, contact, email, phone, bio, followers, verified
+                )
+                has_substantive_detail = any((web, loc, email, phone, bio))
+                if not company or len(extracted) < 2 or not has_substantive_detail:
+                    errors.append(f"{name}:response_without_usable_profile_fields")
+                    print(
+                        f"Social provider response rejected as unusable: {name}; "
+                        f"fields={json.dumps(extracted, ensure_ascii=False)}"
+                    )
+                    continue
+            except Exception as exc:
+                errors.append(f"{name}:normalization_error:{type(exc).__name__}")
+                print(f"Social provider normalization failed: {name} | {type(exc).__name__}: {exc}")
+                continue
+
+            print(
+                f"Social provider usable profile: {name}; "
+                f"fields={json.dumps(extracted, ensure_ascii=False)}"
+            )
+            return name, data, errors
+
         except Exception as e:
             errors.append(f"{name}:{e}")
             print(f"Social provider failed: {name} | {e}")
-            # If the Worker explicitly reports its daily cap, do not consume
-            # paid fallback-provider quota to bypass that configured safeguard.
+            # Do not spend paid fallback quota to bypass an explicit Worker cap.
             error_text = str(e).lower()
             if name == "CloudflareDeepBackup" and (
                 "cloudflare_http_429" in error_text
