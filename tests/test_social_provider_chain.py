@@ -1,0 +1,67 @@
+import sys
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+import social_collector as social
+
+
+class ProviderChainTests(unittest.TestCase):
+    def test_unusable_cloudflare_response_falls_through_to_valid_provider(self):
+        valid_profile = (
+            "Example Chemical Company",
+            "https://example.cn",
+            "Shanghai, China",
+            "Example Chemical Company",
+            "",
+            "",
+            "Industrial chemical manufacturer in China",
+            "120",
+            "",
+            "https://www.facebook.com/example",
+        )
+
+        def normalize(platform, provider, data, fallback):
+            if provider == "CloudflareDeepBackup":
+                return ("", "", "", "", "", "", "", "", "", fallback)
+            return valid_profile
+
+        with (
+            patch.object(social, "cloudflare_profile", return_value={"ok": True}) as cf,
+            patch.object(social, "scrapecreators_profile", return_value={"name": "Example Chemical Company"}) as sc,
+            patch.object(social, "apify_profile") as apify,
+            patch.object(social, "socialfetch_profile") as sf,
+            patch.object(social, "normalize_provider", side_effect=normalize),
+            patch.object(social, "relevant_social_profile", return_value=True),
+        ):
+            provider, data, errors = social.provider_chain(
+                "facebook", "https://www.facebook.com/example"
+            )
+
+        self.assertEqual(provider, "ScrapeCreators")
+        self.assertTrue(data)
+        self.assertTrue(any("response_without_usable_profile_fields" in e for e in errors))
+        cf.assert_called_once()
+        sc.assert_called_once()
+        apify.assert_not_called()
+        sf.assert_not_called()
+
+    def test_empty_responses_do_not_count_as_success(self):
+        with (
+            patch.object(social, "cloudflare_profile", return_value={}),
+            patch.object(social, "scrapecreators_profile", return_value=[]),
+            patch.object(social, "apify_profile", return_value=None),
+            patch.object(social, "socialfetch_profile", return_value=""),
+        ):
+            provider, data, errors = social.provider_chain(
+                "facebook", "https://www.facebook.com/example"
+            )
+
+        self.assertEqual(provider, "")
+        self.assertIsNone(data)
+        self.assertEqual(len(errors), 4)
+
+
+if __name__ == "__main__":
+    unittest.main()
