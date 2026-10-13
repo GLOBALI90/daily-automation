@@ -4,13 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       social_platform:
-        description: "Supported native social network for this manual test"
+        description: "Only Facebook and LinkedIn are enabled during focused collection"
         required: false
         type: choice
         options:
           - auto
           - facebook
-          - x
           - linkedin
         default: auto
       send_emails:
