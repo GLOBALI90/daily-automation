@@ -134,7 +134,7 @@ jobs:
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.6-flash' }}
           SEND_EMAILS: "true"
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          WHATSAPP_ENABLED: ${{ env.WAHA_READY == 'true' && 'true' || 'false' }}
+          WHATSAPP_ENABLED: "true"
           WAHA_URL: ${{ secrets.WAHA_URL }}
           WAHA_SESSION: ${{ secrets.WAHA_SESSION }}
           WAHA_API_KEY: ${{ secrets.WAHA_API_KEY }}
