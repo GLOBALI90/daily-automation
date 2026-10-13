@@ -144,6 +144,31 @@ class ProviderChainTests(unittest.TestCase):
         cf.assert_not_called()
         sf.assert_not_called()
 
+    def test_canonical_linkedin_url_normalizes_regional_hosts(self):
+        self.assertEqual(
+            social.canonical_linkedin_url("https://in.linkedin.com/in/example-person?trk=public"),
+            "https://www.linkedin.com/in/example-person/",
+        )
+        self.assertEqual(
+            social.canonical_linkedin_url("https://it.linkedin.com/company/example-company/"),
+            "https://www.linkedin.com/company/example-company/",
+        )
+
+    def test_apify_person_profile_uses_explicit_urls_input(self):
+        with patch.object(social, "actor", return_value=[{"name": "Example Person"}]) as actor:
+            result = social.apify_profile(
+                "linkedin", "https://in.linkedin.com/in/example-person"
+            )
+
+        self.assertEqual(result, [{"name": "Example Person"}])
+        actor.assert_called_once_with(
+            "linkedin",
+            {
+                "profileScraperMode": "Profile details no email ($4 per 1k)",
+                "urls": ["https://www.linkedin.com/in/example-person/"],
+            },
+        )
+
     def test_empty_responses_do_not_count_as_success(self):
         with (
             patch.object(social, "cloudflare_profile", return_value={}),
