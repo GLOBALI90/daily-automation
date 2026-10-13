@@ -1,4 +1,4 @@
-"""Shared Gemini generation with bounded retries and transient-error model fallback."""
+"""Shared Gemini generation with bounded retries and multiple model fallbacks."""
 
 import os
 import random
@@ -8,6 +8,7 @@ from google import genai
 from google.genai import types
 
 TRANSIENT_CODES = {408, 429, 500, 502, 503, 504}
+FATAL_CODES = {401, 403}
 
 
 def _error_code(exc):
@@ -34,12 +35,13 @@ def _is_transient(exc):
         or "service unavailable" in message
         or "high demand" in message
         or "503" in message
+        or "504" in message
         or "429" in message
     )
 
 
 def generate_text(prompt, *, api_key=None, model=None):
-    """Generate text; retry transient failures and only then try configured fallbacks."""
+    """Generate text with bounded retries; try other models after model/service errors."""
     key = (api_key or os.getenv("GEMINI_API_KEY", "")).strip()
     if not key:
         raise RuntimeError("GEMINI_API_KEY is not configured")
@@ -54,46 +56,54 @@ def generate_text(prompt, *, api_key=None, model=None):
         if candidate and candidate not in models:
             models.append(candidate)
 
-    # Bound each network request so transient provider stalls cannot consume the whole workflow timeout.
     timeout_ms = max(5_000, min(int(os.getenv("GEMINI_TIMEOUT_MS", "15000")), 30_000))
     client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=timeout_ms))
     last_error = None
 
-    # Keep one fallback only: bounded request time is more valuable than exhausting
-    # every fallback model during a short scheduled automation run.
-    models = models[:2]
     for model_index, candidate in enumerate(models):
+        # Retry primary once for transient capacity/timeouts. For 429, move on immediately:
+        # it often represents a quota/rate limit that a short retry will not resolve.
         attempts = 2 if model_index == 0 else 1
         for attempt in range(1, attempts + 1):
             try:
                 response = client.models.generate_content(model=candidate, contents=prompt)
-                text = (response.text or "").strip()
-                if text:
+                generated = (response.text or "").strip()
+                if generated:
                     if model_index:
                         print(f"Gemini fallback model succeeded: {candidate}")
-                    return text
-                raise RuntimeError("Gemini returned an empty response")
+                    return generated
+                last_error = RuntimeError("Gemini returned an empty response")
+                print(f"Gemini model returned empty text: {candidate}; trying next model.")
+                break
             except Exception as exc:
                 last_error = exc
-                transient = _is_transient(exc)
-                if not transient:
-                    raise
-                if attempt < attempts:
-                    delay = min(2 ** attempt, 16) + random.uniform(0, 1)
-                    print(
-                        f"Gemini transient error on {candidate} "
-                        f"(attempt {attempt}/{attempts}, code={_error_code(exc)}); "
-                        f"retrying in {delay:.1f}s."
-                    )
-                    time.sleep(delay)
-                else:
-                    print(
-                        f"Gemini model {candidate} exhausted {attempts} attempts "
-                        f"after a transient error (code={_error_code(exc)})."
-                    )
-        # Only fall through to the next model after transient failures.
+                code = _error_code(exc)
+                if code in FATAL_CODES:
+                    raise RuntimeError(
+                        f"Gemini authentication/permission failed (HTTP {code}); check GEMINI_API_KEY and project access."
+                    ) from exc
 
+                transient = _is_transient(exc)
+                print(
+                    f"Gemini model failure: model={candidate}; attempt={attempt}/{attempts}; "
+                    f"code={code}; transient={transient}; error={type(exc).__name__}"
+                )
+                if transient and attempt < attempts and code != 429:
+                    delay = min(2 ** attempt, 8) + random.uniform(0, 0.5)
+                    print(f"Retrying Gemini model {candidate} in {delay:.1f}s.")
+                    time.sleep(delay)
+                    continue
+                # Do not stop at a single overloaded or unavailable model. Try the next
+                # configured model, while keeping total attempts bounded by this list.
+                break
+
+    code = _error_code(last_error) if last_error else None
+    if code == 429:
+        reason = "rate limit/quota or capacity limit (HTTP 429)"
+    elif code in {503, 504, 408, 500, 502}:
+        reason = f"temporary Gemini service/timeout failure (HTTP {code})"
+    else:
+        reason = type(last_error).__name__ if last_error else "UnknownError"
     raise RuntimeError(
-        "Gemini generation failed after bounded retries and fallback models: "
-        f"{type(last_error).__name__ if last_error else 'UnknownError'}"
+        f"Gemini generation failed after trying {len(models)} configured model(s): {reason}"
     ) from last_error
