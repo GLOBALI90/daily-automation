@@ -87,7 +87,7 @@ Email body
     return llm(prompt)
 
 
-def send_email(to, content, attempts=2):
+def send_email(to, content, attempts=1):
     if os.getenv("SEND_EMAILS", "false").lower() != "true":
         return "draft_only"
     password = os.getenv("GMAIL_APP_PASSWORD", "")
@@ -150,7 +150,7 @@ def _waha_headers():
     return headers
 
 
-def send_whatsapp(raw_number, content, attempts=2):
+def send_whatsapp(raw_number, content, attempts=1):
     if os.getenv("WHATSAPP_ENABLED", "false").lower() != "true":
         return "draft_only"
     base = os.getenv("WAHA_URL", "").strip().rstrip("/")
@@ -173,16 +173,16 @@ def send_whatsapp(raw_number, content, attempts=2):
     for attempt in range(1, attempts + 1):
         try:
             # Wake a sleeping host, then inspect session readiness.
-            wake = requests.get(base, headers=headers, timeout=20)
+            wake = requests.get(base, headers=headers, timeout=10)
             print(f"WAHA wake request: HTTP {wake.status_code}")
             session_url = f"{base}/api/sessions/{quote_component(session_name)}"
-            status_resp = requests.get(session_url, headers=headers, timeout=25)
+            status_resp = requests.get(session_url, headers=headers, timeout=10)
             if status_resp.status_code == 404:
                 start_resp = requests.post(
                     f"{base}/api/sessions/start",
                     headers=headers,
                     json={"name": session_name},
-                    timeout=30,
+                    timeout=10,
                 )
                 if start_resp.status_code >= 400 and start_resp.status_code != 422:
                     start_resp.raise_for_status()
@@ -191,8 +191,8 @@ def send_whatsapp(raw_number, content, attempts=2):
 
             # Allow a cold WAHA instance a short bounded readiness window.
             ready = False
-            for _ in range(6):
-                check = requests.get(session_url, headers=headers, timeout=20)
+            for _ in range(4):
+                check = requests.get(session_url, headers=headers, timeout=8)
                 if check.ok:
                     try:
                         state = str(check.json().get("status", "")).upper()
@@ -203,9 +203,9 @@ def send_whatsapp(raw_number, content, attempts=2):
                         if ready:
                             break
                     elif state == "STARTING":
-                        time.sleep(5)
+                        time.sleep(3)
                         continue
-                time.sleep(5)
+                time.sleep(3)
             if not ready:
                 return "waha_session_not_ready"
 
@@ -213,7 +213,7 @@ def send_whatsapp(raw_number, content, attempts=2):
                 f"{base}/api/{quote_component(session_name)}/checkNumberStatus",
                 headers=headers,
                 json={"phoneNumber": digits},
-                timeout=30,
+                timeout=10,
             )
             check_number.raise_for_status()
             number_data = check_number.json()
@@ -240,7 +240,7 @@ def send_whatsapp(raw_number, content, attempts=2):
                 f"{base}/api/sendText",
                 headers=headers,
                 json={"chatId": chat_id, "text": content.strip(), "session": session_name},
-                timeout=35,
+                timeout=20,
             )
             sent.raise_for_status()
             return "sent"
@@ -255,6 +255,17 @@ def send_whatsapp(raw_number, content, attempts=2):
 def quote_component(value):
     from urllib.parse import quote
     return quote(str(value), safe="")
+
+def persist_outreach(rows, fieldnames):
+    """Atomically checkpoint completed lead outcomes so a later timeout loses no progress."""
+    OUTREACH.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = OUTREACH.with_suffix(OUTREACH.suffix + ".tmp")
+    with temp_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+    temp_path.replace(OUTREACH)
+
 
 def main():
     if not LEADS.exists():
@@ -285,6 +296,11 @@ def main():
         "company_name", "website", "email", "message", "status",
         "whatsapp_number", "whatsapp_message", "whatsapp_status", "run_id"
     ]
+    # Preserve any historical columns so DictWriter never crashes on older CSV schemas.
+    for old_row in existing:
+        for field in old_row:
+            if field not in fieldnames:
+                fieldnames.append(field)
     new_rows = []
 
     for row in candidates[:OUTREACH_LIMIT_PER_RUN]:
@@ -292,6 +308,8 @@ def main():
         if key and key in done:
             print(f"Outreach skipped: duplicate lead identity ({key[:120]})")
             continue
+        company_label = (row.get("company_name") or row.get("website") or "unnamed lead").strip()
+        print(f"OUTREACH_LEAD_START company={company_label[:100]}", flush=True)
         message = make_message(row)
         if not message:
             new_rows.append({
@@ -302,6 +320,8 @@ def main():
                 "status": "ai_failed",
                 "run_id": row.get("run_id", current_run_id),
             })
+            persist_outreach(existing + new_rows, fieldnames)
+            print(f"OUTREACH_LEAD_DONE company={company_label[:100]} email_status=ai_failed whatsapp_status=not_attempted", flush=True)
             continue
         status = send_email(row.get("email", ""), message) if row.get("email") else "no_public_email"
         wa_number = (row.get("whatsapp") or row.get("phone") or "").strip()
@@ -325,12 +345,17 @@ def main():
         })
         if key:
             done.add(key)
+        # Checkpoint each lead before beginning the next one; the workflow save
+        # step can commit this file even if a later lead hits its step timeout.
+        persist_outreach(existing + new_rows, fieldnames)
+        print(
+            f"OUTREACH_LEAD_DONE company={company_label[:100]} "
+            f"email_status={status} whatsapp_status={wa_status}",
+            flush=True,
+        )
 
     all_rows = existing + new_rows
-    with OUTREACH.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(all_rows)
+    persist_outreach(all_rows, fieldnames)
 
     sent_count = sum(1 for r in new_rows if r.get("status") == "sent")
     draft_count = sum(1 for r in new_rows if r.get("status") == "draft_only")
