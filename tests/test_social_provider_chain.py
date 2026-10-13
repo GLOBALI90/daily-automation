@@ -157,6 +157,47 @@ class ProviderChainTests(unittest.TestCase):
         self.assertEqual(len(errors), 4)
 
 
+
+    def test_facebook_search_query_is_not_counted_as_profile_evidence(self):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "searchResults": [{
+                        "page_name": "Generic Local Page",
+                        "page_alias": "genericlocal",
+                        "category": "Community",
+                    }]
+                }
+
+        with (
+            patch.object(social, "SCRAPECREATORS", "test-api-key"),
+            patch.object(social, "_scrapecreators_get", return_value=Response().json()),
+        ):
+            candidates = social._facebook_native_candidates(
+                "Jiangsu China chemical manufacturer supplier"
+            )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertNotIn("Jiangsu China chemical manufacturer supplier", candidates[0]["content"])
+        self.assertEqual(
+            social.social_candidate_score("facebook", candidates[0], candidates[0]["url"]),
+            0,
+        )
+
+    def test_discovery_can_enrich_industrial_candidate_when_location_is_missing(self):
+        candidate = {
+            "title": "Example Chemical Manufacturer",
+            "content": "Industrial chemical manufacturer and supplier",
+        }
+        score = social.social_candidate_score(
+            "linkedin", candidate,
+            "https://www.linkedin.com/company/example-chemical"
+        )
+        self.assertGreater(score, 0)
+
     def test_linkedin_search_query_is_not_counted_as_profile_evidence(self):
         class Response:
             def raise_for_status(self):
