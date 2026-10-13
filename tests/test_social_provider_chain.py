@@ -143,10 +143,16 @@ class ProviderChainTests(unittest.TestCase):
                     }],
                 }
 
-        with patch.object(social.session, "get", return_value=Response()):
+        # Unit test must not depend on a real provider secret; mock the
+        # configured API key and HTTP response so it tests ranking only.
+        with (
+            patch.object(social, "SCRAPECREATORS", "test-api-key"),
+            patch.object(social.session, "get", return_value=Response()) as mocked_get,
+        ):
             results = social._linkedin_provider_candidates(
                 "China Jiangsu chemical petrochemical procurement purchasing manager importer"
             )
+        mocked_get.assert_called_once()
 
         self.assertEqual(len(results), 1)
         self.assertNotIn("China Jiangsu chemical petrochemical procurement purchasing manager importer", results[0]["content"])
