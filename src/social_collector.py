@@ -9,7 +9,11 @@ DATA = ROOT / "data"
 LEADS = DATA / "leads.csv"
 DATA.mkdir(exist_ok=True)
 
-MAX_ITEMS = 1  # Respect the Worker daily collection cap: one profile per run.
+# Up to five accepted leads per run. The Cloudflare Worker itself remains
+# capped at one request per run to preserve its four-actions/day allowance.
+MAX_ITEMS = min(5, max(1, int(os.getenv("SOCIAL_MAX_ITEMS", "5") or "5")))
+CLOUDFLARE_CALLS_THIS_RUN = 0
+MAX_CLOUDFLARE_CALLS_PER_RUN = 1
 PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").strip().lower().lstrip(chr(92) + "/")
 
 APIFY = os.getenv("APIFY_API_TOKEN", "").strip()
@@ -390,40 +394,42 @@ def social_candidate_score(platform, result, url):
 
 
 def discover(p):
+    """Return several ranked candidates across both targeted queries."""
     last_error = None
+    ranked_by_url = {}
     for q in NATIVE_QUERIES[p]:
         try:
             results = native_candidates(p, q)
         except Exception as exc:
             last_error = exc
             print(f"Native social discovery failed: platform={p}; method={DISCOVERY_METHODS[p]}; error={type(exc).__name__}: {exc}")
-            # Do not silently fall back to You.com/SearXNG from this collector.
-            # Continue to the next targeted query; one transient provider failure
-            # must not suppress the second LinkedIn query.
             continue
 
-        ranked = []
-        seen = set()
         for item in results:
             u = val(item.get("url")).rstrip("/")
-            if not u or u in seen or not good(p, u):
+            if not u or not good(p, u):
                 continue
-            seen.add(u)
             score = social_candidate_score(p, item, u)
-            if score:
-                ranked.append((score, u, q, DISCOVERY_METHODS[p]))
-        if ranked:
-            ranked.sort(key=lambda item: item[0], reverse=True)
-            chosen = ranked[0]
-            print(
-                f"Native social discovery ranking: platform={p}; method={chosen[3]}; "
-                f"candidates={len(ranked)}; selected_score={chosen[0]}; url={chosen[1]}"
-            )
-            return [(chosen[1], chosen[2], chosen[3])]
-    if last_error:
-        print(f"Social discovery ended without candidates: platform={p}; last_error={type(last_error).__name__}: {last_error}")
-    return []
+            if not score:
+                continue
+            current = ranked_by_url.get(u)
+            candidate = (score, u, q, DISCOVERY_METHODS[p])
+            if current is None or score > current[0]:
+                ranked_by_url[u] = candidate
 
+    ranked = sorted(ranked_by_url.values(), key=lambda item: item[0], reverse=True)
+    # Gather a small candidate pool from each enabled platform. Final profile
+    # validation remains strict; the main loop stops after five accepted leads.
+    selected = ranked[:MAX_ITEMS]
+    if selected:
+        print(
+            f"Native social discovery ranking: platform={p}; method={selected[0][3]}; "
+            f"candidates={len(ranked)}; selected_for_enrichment={len(selected)}; "
+            f"top_score={selected[0][0]}"
+        )
+    elif last_error:
+        print(f"Social discovery ended without candidates: platform={p}; last_error={type(last_error).__name__}: {last_error}")
+    return [(u, q, method) for _, u, q, method in selected]
 
 def get_json(url, headers=None, params=None, timeout=45):
     r = session.get(
@@ -535,6 +541,12 @@ def cloudflare_profile(p, url):
     if not CLOUDFLARE_TOKEN:
         raise RuntimeError("SOCIAL_DEEP_BACKUP_TOKEN missing")
 
+    global CLOUDFLARE_CALLS_THIS_RUN
+    if CLOUDFLARE_CALLS_THIS_RUN >= MAX_CLOUDFLARE_CALLS_PER_RUN:
+        raise RuntimeError("cloudflare_per_run_cap_reached")
+    # Count the request before sending it so a failed attempt still consumes
+    # this run's one-call allowance.
+    CLOUDFLARE_CALLS_THIS_RUN += 1
     r = session.post(
         f"{CLOUDFLARE_URL}/collect",
         headers={
@@ -573,12 +585,14 @@ def provider_chain(p, url):
             ("SocialFetch", lambda: socialfetch_profile(p, url)),
         ]
     else:
-        providers = [
-            ("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)),
+        providers = []
+        if CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+            providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
+        providers.extend([
             ("ScrapeCreators", lambda: scrapecreators_profile(p, url)),
             ("Apify", lambda: apify_profile(p, url)),
             ("SocialFetch", lambda: socialfetch_profile(p, url)),
-        ]
+        ])
 
     for name, fn in providers:
         try:
@@ -897,18 +911,22 @@ def discover_with_auto_fallback(platform, is_auto):
 
 
 def main():
-    # Four scheduled runs/day, split evenly between Facebook and LinkedIn.
-    # In auto mode, try the other allowed platform if the scheduled platform has
-    # no candidates. Keep the Worker cap at one accepted profile per run.
-    utc_hour = datetime.now(timezone.utc).hour
-    scheduled_slot = min(3, utc_hour // 6)
-    auto_schedule = ["facebook", "linkedin", "facebook", "linkedin"]
+    # Auto mode actively searches both allowed networks on every run.
+    # Manual mode still restricts collection to the explicitly selected network.
     is_auto = PLATFORM not in PLATFORMS
-    p = PLATFORM if not is_auto else auto_schedule[scheduled_slot]
-    p, found = discover_with_auto_fallback(p, is_auto)
+    platforms_to_collect = AUTO_PLATFORMS if is_auto else [PLATFORM]
+    found = []
+    for target_platform in platforms_to_collect:
+        platform_candidates = discover(target_platform)
+        found.extend((target_platform, url, query, method)
+                     for url, query, method in platform_candidates)
+        print(
+            f"SOCIAL_DISCOVERY_SUMMARY platform={target_platform}; "
+            f"candidates={len(platform_candidates)}"
+        )
 
     if not found:
-        print(f"No {p} candidates after auto fallback")
+        print("No Facebook or LinkedIn candidates found")
         return
 
     rows = []
@@ -938,7 +956,9 @@ def main():
         "failed": 0
     }
 
-    for url, query, discovery_method in found[:MAX_ITEMS]:
+    for p, url, query, discovery_method in found:
+        if added >= MAX_ITEMS:
+            break
         indexed = LINKEDIN_SEARCH_RESULTS.get(url.rstrip("/"), {}) if p == "linkedin" else {}
         print(
             "SOCIAL_SOURCE_AUDIT " + json.dumps({
@@ -1055,8 +1075,10 @@ def main():
         w.writerows(rows)
 
     print(
-        f"Social collection: {p}; discovery={DISCOVERY_METHODS[p]}; discovered={len(found)}; added={added}; "
-        f"cap={MAX_ITEMS}; providers={json.dumps(provider_counts, ensure_ascii=False)}"
+        f"Social collection: platforms={','.join(platforms_to_collect)}; "
+        f"discovered_candidates={len(found)}; added={added}; target_cap={MAX_ITEMS}; "
+        f"cloudflare_calls={CLOUDFLARE_CALLS_THIS_RUN}/{MAX_CLOUDFLARE_CALLS_PER_RUN}; "
+        f"providers={json.dumps(provider_counts, ensure_ascii=False)}"
     )
 
 
