@@ -82,12 +82,11 @@ def handle_from_url(u):
 
 def good(p, u):
     d = domain(u)
-    ok = {
-        "linkedin": {"linkedin.com"},
-        "facebook": {"facebook.com"},
-        "x": {"x.com", "twitter.com"}
-    }[p]
-    return d in ok and not any(
+    allowed = {
+        "linkedin": ("linkedin.com",),
+        "facebook": ("facebook.com",),
+    }.get(p, ())
+    return any(d == host or d.endswith("." + host) for host in allowed) and not any(
         x in u.lower()
         for x in ["/search", "/explore", "/hashtag", "/jobs"]
     )
