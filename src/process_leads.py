@@ -287,10 +287,20 @@ def main():
 
     done = {key for row in existing if (key := lead_key(row))}
     current_run_id = os.getenv("GITHUB_RUN_ID", "")
-    if current_run_id:
-        candidates = [r for r in rows if r.get("run_id") == current_run_id]
-    else:
-        candidates = rows[-OUTREACH_LIMIT_PER_RUN:]
+    # Resume older collected leads that have not reached an outreach outcome.
+    # Restrict rows without a stable identity to the current run to avoid repeats.
+    candidates = []
+    for candidate in rows:
+        key = lead_key(candidate)
+        is_current = bool(current_run_id and candidate.get("run_id") == current_run_id)
+        is_pending = bool(key and key not in done)
+        if is_current or is_pending:
+            candidates.append(candidate)
+    print(
+        f"OUTREACH_QUEUE pending_candidates={len(candidates)} "
+        f"already_recorded={len(done)} limit={OUTREACH_LIMIT_PER_RUN}",
+        flush=True,
+    )
 
     fieldnames = [
         "company_name", "website", "email", "message", "status",
