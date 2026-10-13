@@ -393,8 +393,8 @@ def discover(p):
             last_error = exc
             print(f"Native social discovery failed: platform={p}; method={DISCOVERY_METHODS[p]}; error={type(exc).__name__}: {exc}")
             # Do not silently fall back to You.com/SearXNG from this collector.
-            if p == "linkedin":
-                break
+            # Continue to the next targeted query; one transient provider failure
+            # must not suppress the second LinkedIn query.
             continue
 
         ranked = []
@@ -823,15 +823,23 @@ def normalize_provider(p, provider, data, fallback):
 
 def main():
     # Four scheduled runs/day, split evenly between Facebook and LinkedIn.
-    # One profile per run keeps within the Worker cap of four Browser Run actions/day.
+    # In auto mode, try the other allowed platform if the scheduled platform has
+    # no candidates. Keep the Worker cap at one accepted profile per run.
     utc_hour = datetime.now(timezone.utc).hour
     scheduled_slot = min(3, utc_hour // 6)
     auto_schedule = ["facebook", "linkedin", "facebook", "linkedin"]
-    p = PLATFORM if PLATFORM in PLATFORMS else auto_schedule[scheduled_slot]
+    is_auto = PLATFORM not in PLATFORMS
+    p = PLATFORM if not is_auto else auto_schedule[scheduled_slot]
     found = discover(p)
 
+    if not found and is_auto:
+        alternate = "linkedin" if p == "facebook" else "facebook"
+        print(f"Auto fallback: {p} returned no candidates; trying {alternate}.")
+        p = alternate
+        found = discover(p)
+
     if not found:
-        print(f"No {p} candidates")
+        print(f"No {p} candidates after auto fallback")
         return
 
     rows = []
