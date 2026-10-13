@@ -821,6 +821,16 @@ def normalize_provider(p, provider, data, fallback):
     )
 
 
+def discover_with_auto_fallback(platform, is_auto):
+    """Discover on the selected platform, then try the other allowed platform in auto mode."""
+    found = discover(platform)
+    if found or not is_auto:
+        return platform, found
+    alternate = "linkedin" if platform == "facebook" else "facebook"
+    print(f"Auto fallback: {platform} returned no candidates; trying {alternate}.")
+    return alternate, discover(alternate)
+
+
 def main():
     # Four scheduled runs/day, split evenly between Facebook and LinkedIn.
     # In auto mode, try the other allowed platform if the scheduled platform has
@@ -830,13 +840,7 @@ def main():
     auto_schedule = ["facebook", "linkedin", "facebook", "linkedin"]
     is_auto = PLATFORM not in PLATFORMS
     p = PLATFORM if not is_auto else auto_schedule[scheduled_slot]
-    found = discover(p)
-
-    if not found and is_auto:
-        alternate = "linkedin" if p == "facebook" else "facebook"
-        print(f"Auto fallback: {p} returned no candidates; trying {alternate}.")
-        p = alternate
-        found = discover(p)
+    p, found = discover_with_auto_fallback(p, is_auto)
 
     if not found:
         print(f"No {p} candidates after auto fallback")
