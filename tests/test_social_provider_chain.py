@@ -71,6 +71,44 @@ class ProviderChainTests(unittest.TestCase):
         self.assertEqual(found, [])
         discover.assert_called_once_with("facebook")
 
+    def test_gemini_retries_primary_then_uses_fallback_model(self):
+        class TemporaryServiceError(Exception):
+            code = 503
+
+        class Response:
+            text = "A short B2B message"
+
+        class Models:
+            def __init__(self):
+                self.calls = []
+
+            def generate_content(self, *, model, contents):
+                self.calls.append(model)
+                if len(self.calls) <= 2:
+                    raise TemporaryServiceError("temporarily unavailable")
+                return Response()
+
+        class Client:
+            def __init__(self):
+                self.models = Models()
+
+        client = Client()
+        with (
+            patch.object(gemini_utils.genai, "Client", return_value=client),
+            patch.object(gemini_utils.time, "sleep"),
+        ):
+            result = gemini_utils.generate_text(
+                "Write a short message",
+                api_key="test-key",
+                model="gemini-3.6-flash",
+            )
+
+        self.assertEqual(result, "A short B2B message")
+        self.assertEqual(
+            client.models.calls,
+            ["gemini-3.6-flash", "gemini-3.6-flash", "gemini-3.8-flash"],
+        )
+
     def test_empty_responses_do_not_count_as_success(self):
         with (
             patch.object(social, "cloudflare_profile", return_value={}),
