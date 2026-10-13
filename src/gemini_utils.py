@@ -49,7 +49,7 @@ def generate_text(prompt, *, api_key=None, model=None):
     primary = (model or os.getenv("GEMINI_MODEL", "gemini-3.8-flash")).strip()
     configured = os.getenv(
         "GEMINI_FALLBACK_MODELS",
-        "gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite",
+        "gemini-3.8-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite",
     )
     models = []
     for candidate in [primary, *[x.strip() for x in configured.split(",")]]:
