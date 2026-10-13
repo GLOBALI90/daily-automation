@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       social_platform:
-        description: "Only Facebook and LinkedIn are enabled during focused collection"
+        description: "Choose auto to alternate focused Facebook and LinkedIn collection"
         required: false
         type: choice
         options:
@@ -19,7 +19,6 @@ on:
         options:
           - "1"
         default: "1"
-
 
   # Four scheduled runs per UTC day, spaced six hours apart.
   # Keep aligned with the Cloudflare Worker cap of four Browser Run actions/day.
@@ -56,7 +55,7 @@ jobs:
       - name: Test social provider fallback and response quality
         run: python -m unittest discover -s tests -v
 
-      - name: Collect public social leads (native platform/provider discovery; hard cap one profile per run)
+      - name: Collect public social leads (Facebook and LinkedIn; hard cap one profile per run)
         env:
           SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
           APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
@@ -67,6 +66,18 @@ jobs:
           SOCIAL_MAX_ITEMS: ${{ inputs.social_max_items || '1' }}
         run: python src/social_collector.py
 
+      - name: Generate and send B2B outreach (email and WhatsApp enabled; max three leads per run)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.8-flash' }}
+          SEND_EMAILS: "true"
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          WHATSAPP_ENABLED: "true"
+          WAHA_URL: ${{ secrets.WAHA_URL }}
+          WAHA_SESSION: ${{ secrets.WAHA_SESSION }}
+          WAHA_API_KEY: ${{ secrets.WAHA_API_KEY }}
+        run: python src/process_leads.py
+
       - name: Save results
         if: always()
         run: |
@@ -74,7 +85,7 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git add data/
           if ! git diff --cached --quiet; then
-            git commit -m "Save automation collection results"
+            git commit -m "Save automation collection and outreach results"
             # Integrate commits that landed on main while this run was collecting.
             git fetch origin main
             git rebase origin/main
