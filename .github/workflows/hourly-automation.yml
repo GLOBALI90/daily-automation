@@ -112,7 +112,7 @@ jobs:
           GEMINI_FALLBACK_MODELS: gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite
           YDC_API_KEY: ${{ secrets.YDC_API_KEY }}
           SEARXNG_URL: ${{ secrets.SEARXNG_URL }}
-        run: python src/run_collector_resilient.py
+        run: echo "General web lead search disabled during Facebook/LinkedIn-only collection"
 
       - name: Generate AI outreach and send Gmail
         if: github.event_name != 'workflow_dispatch' || inputs.social_platform == 'auto'
