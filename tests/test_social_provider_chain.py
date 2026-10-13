@@ -139,7 +139,8 @@ class ProviderChainTests(unittest.TestCase):
         self.assertEqual(provider, "Apify")
         self.assertEqual(data, company_data)
         actor.assert_called_once_with(
-            "linkedin_company", {"companies": [company_url]}
+            "linkedin_company",
+            {"companies": [social.canonical_linkedin_url(company_url)]},
         )
         cf.assert_not_called()
         sf.assert_not_called()
