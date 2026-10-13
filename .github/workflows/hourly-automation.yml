@@ -68,6 +68,7 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Validate Gemini credentials and model before collection
+        if: github.event_name != 'workflow_dispatch' || inputs.social_platform == 'auto'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: gemini-3.8-flash
@@ -115,6 +116,7 @@ jobs:
         run: python src/run_collector_resilient.py
 
       - name: Generate AI outreach and send Gmail
+        if: github.event_name != 'workflow_dispatch' || inputs.social_platform == 'auto'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: gemini-3.8-flash
