@@ -33,6 +33,7 @@ AUTO_PLATFORMS = ["facebook", "linkedin"]
 
 ACTORS = {
     "linkedin": "harvestapi~linkedin-profile-scraper",
+    "linkedin_company": "harvestapi~linkedin-company",
     "facebook": "apify~facebook-pages-scraper",
     "x": "apidojo~tweet-scraper",
 }
@@ -509,6 +510,10 @@ def actor(p, payload):
 
 def apify_profile(p, url):
     if p == "linkedin":
+        if "/company/" in urlparse(url).path.lower():
+            # Company pages require HarvestAPI's company actor and its
+            # documented "companies" input, not the person-profile actor.
+            return actor("linkedin_company", {"companies": [url]})
         return actor(p, {
             "profileScraperMode": "Profile details no email",
             "queries": [url]
@@ -548,12 +553,28 @@ def provider_chain(p, url):
     # A non-empty HTTP response is not necessarily a successful profile fetch.
     # Require a company/profile name plus at least one substantive profile field
     # before accepting a provider; otherwise continue to the next adapter.
-    providers = [
-        ("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)),
-        ("ScrapeCreators", lambda: scrapecreators_profile(p, url)),
-        ("Apify", lambda: apify_profile(p, url)),
-        ("SocialFetch", lambda: socialfetch_profile(p, url)),
-    ]
+    if p == "linkedin" and "/company/" in urlparse(url).path.lower():
+        # The configured Cloudflare Worker explicitly rejects LinkedIn URLs,
+        # and SocialFetch's configured endpoint is for person profiles. Avoid
+        # spending Worker quota or issuing a known-mismatched profile request.
+        providers = [
+            ("ScrapeCreators", lambda: scrapecreators_profile(p, url)),
+            ("Apify", lambda: apify_profile(p, url)),
+        ]
+    elif p == "linkedin":
+        # This Worker endpoint does not support LinkedIn URLs.
+        providers = [
+            ("ScrapeCreators", lambda: scrapecreators_profile(p, url)),
+            ("Apify", lambda: apify_profile(p, url)),
+            ("SocialFetch", lambda: socialfetch_profile(p, url)),
+        ]
+    else:
+        providers = [
+            ("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)),
+            ("ScrapeCreators", lambda: scrapecreators_profile(p, url)),
+            ("Apify", lambda: apify_profile(p, url)),
+            ("SocialFetch", lambda: socialfetch_profile(p, url)),
+        ]
 
     for name, fn in providers:
         try:
@@ -742,10 +763,30 @@ def normalize_provider(p, provider, data, fallback):
 
     if provider == "ScrapeCreators":
         if p == "linkedin":
+            is_company = "/company/" in urlparse(fallback).path.lower()
+            if is_company:
+                location = (
+                    x.get("headquarters") or x.get("headquarter")
+                    or x.get("location") or x.get("address") or ""
+                )
+                bio = " | ".join(
+                    val(v) for v in [
+                        x.get("description"), x.get("about"), x.get("industry"),
+                        x.get("specialties"), x.get("slogan")
+                    ] if val(v)
+                )
+                return (
+                    val(x.get("name") or x.get("companyName")), 
+                    val(x.get("website") or x.get("websiteUrl")), val(location),
+                    val(x.get("name") or x.get("companyName")), 
+                    val(x.get("email")), val(x.get("phone")), bio,
+                    val(x.get("followers") or x.get("followerCount") or x.get("followersCount")),
+                    val(x.get("verified")), val(x.get("url") or x.get("linkedinUrl")) or fallback
+                )
             return (
-                val(x.get("name")), "", val(x.get("location")),
-                val(x.get("name")), "", "", val(x.get("about")),
-                val(x.get("followers")), val(x.get("verified")), fallback
+                val(x.get("name")), val(x.get("website") or x.get("websiteUrl")), val(x.get("location")),
+                val(x.get("name")), "", "", val(x.get("about") or x.get("headline")),
+                val(x.get("followers") or x.get("followerCount")), val(x.get("verified")), fallback
             )
         if p == "facebook":
             return (
@@ -776,6 +817,26 @@ def normalize_provider(p, provider, data, fallback):
             val(xdata.get("headline") or xdata.get("about") or xdata.get("bio") or xdata.get("description")),
             val(xdata.get("followers")),
             val(xdata.get("verified")), fallback
+        )
+
+    if p == "linkedin" and "/company/" in urlparse(fallback).path.lower():
+        location = (
+            x.get("headquarters") or x.get("headquarter")
+            or x.get("location") or x.get("address") or ""
+        )
+        bio = " | ".join(
+            val(v) for v in [
+                x.get("description"), x.get("about"), x.get("industry"),
+                x.get("specialties"), x.get("tagline"), x.get("slogan")
+            ] if val(v)
+        )
+        return (
+            val(x.get("name") or x.get("companyName") or x.get("company_name")),
+            val(x.get("website") or x.get("websiteUrl")), val(location),
+            val(x.get("name") or x.get("companyName") or x.get("company_name")),
+            val(x.get("email")), val(x.get("phone")), bio,
+            val(x.get("followersCount") or x.get("followers") or x.get("followerCount")),
+            val(x.get("verified")), val(x.get("url") or x.get("linkedinUrl") or x.get("companyUrl")) or fallback
         )
 
     if p == "linkedin":
