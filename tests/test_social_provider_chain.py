@@ -216,14 +216,14 @@ class ProviderChainTests(unittest.TestCase):
             0,
         )
 
-    def test_discovery_can_enrich_industrial_candidate_when_location_is_missing(self):
+    def test_discovery_can_enrich_auto_parts_factory_when_location_is_missing(self):
         candidate = {
-            "title": "Example Chemical Manufacturer",
-            "content": "Industrial chemical manufacturer and supplier",
+            "title": "Example Auto Parts Manufacturer",
+            "content": "Automotive components factory and production supplier",
         }
         score = social.social_candidate_score(
             "linkedin", candidate,
-            "https://www.linkedin.com/company/example-chemical"
+            "https://www.linkedin.com/company/example-auto-parts"
         )
         self.assertGreater(score, 0)
 
