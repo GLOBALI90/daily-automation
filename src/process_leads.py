@@ -22,7 +22,7 @@ FROM_ADDRESS = "saberi.export.import@gmail.com"
 
 def llm(prompt):
     key = os.getenv("GEMINI_API_KEY")
-    model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+    model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
     if not key:
         print("Gemini provider skipped: GEMINI_API_KEY is not configured")
         return ""
