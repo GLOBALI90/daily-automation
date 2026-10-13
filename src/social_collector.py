@@ -109,10 +109,14 @@ def good(p, u):
 # Strict target: Chinese B2B industrial companies and relevant purchasing professionals only.
 # No broad consumer, lifestyle, entertainment, unrelated tech, or generic lead collection.
 INDUSTRY_TERMS = (
-    "chemical", "chemicals", "petrochemical", "petrochemicals", "petroleum",
-    "oil and gas", "oil & gas", "refinery", "steel", "metal", "polymer",
-    "resin", "fertilizer", "solvent", "raw material", "raw materials",
-    "feedstock", "industrial materials", "industrial chemical"
+    "automotive parts", "auto parts", "automobile parts", "car parts",
+    "automotive components", "automobile components", "vehicle components",
+    "auto component", "car component", "automotive supplier",
+    "automotive manufacturing", "auto parts manufacturer", "car parts factory",
+    "engine parts", "brake parts", "transmission parts", "suspension parts",
+    "steering parts", "body parts", "stamping parts", "forged parts",
+    "casting parts", "machined parts", "plastic auto parts", "rubber auto parts",
+    "汽车零部件", "汽车配件", "汽车零配件", "汽车制造", "汽车零件"
 )
 COMPANY_TERMS = (
     "company", "group", "limited", "ltd", "manufacturer", "manufacturing",
@@ -150,32 +154,33 @@ def infer_social_industry(company, website, location, bio):
 
 
 def relevant_social_profile(platform, url, company, website, location, bio):
+    """Keep the search focused only on auto-parts factories/manufacturers in China."""
     text = " ".join([url, company, website, location, bio]).lower()
     if not company or company.lower() in {"unknown", "none", "n/a", "facebook", "linkedin"}:
-        return False
-    if not any(term in text for term in INDUSTRY_TERMS):
         return False
     china_match = any(signal in text for signal in CHINA_SIGNALS) or domain(url).endswith(".cn")
     if not china_match:
         return False
-    # A corporate industrial supplier/manufacturer or an actual purchasing/trade role
-    # is required; generic personal accounts and unrelated company pages are rejected.
-    if not (
-        any(term in text for term in COMPANY_TERMS)
-        or any(term in text for term in BUYER_ROLE_TERMS)
-    ):
-        return False
-    return True
+    auto_parts_match = any(term in text for term in INDUSTRY_TERMS)
+    factory_match = any(term in text for term in (
+        "factory", "manufacturer", "manufacturing", "manufacturer of",
+        "production", "plant", "工厂", "生产厂家", "制造厂", "制造商"
+    ))
+    # Do not require buyer roles, export/import keywords, priority provinces,
+    # or unrelated industrial categories. Only the requested target remains.
+    return auto_parts_match and factory_match
 
 
 NATIVE_QUERIES = {
     "linkedin": [
-        "China Jiangsu chemical petrochemical procurement purchasing manager importer",
-        "China industrial raw materials steel chemical supplier buyer",
+        'China automotive parts manufacturer factory "auto parts"',
+        'Chinese automobile components factory automotive supplier',
+        'China engine brake transmission suspension parts manufacturer',
     ],
     "facebook": [
-        "Jiangsu China chemical manufacturer supplier",
-        "China petrochemical industrial raw materials company",
+        'China auto parts factory manufacturer automotive components',
+        'Chinese car parts production factory OEM automotive supplier',
+        '汽车零部件 中国 工厂 生产厂家',
     ],
 }
 
@@ -389,19 +394,17 @@ def social_candidate_score(platform, result, url):
     title = val(result.get("title"))
     snippet = val(result.get("content") or result.get("snippet") or result.get("description"))
     text = " ".join([title, snippet, url]).lower()
-    industry_hits = sum(1 for term in INDUSTRY_TERMS if term in text)
-    buyer_hits = sum(1 for term in BUYER_ROLE_TERMS if term in text)
-    company_hits = sum(1 for term in COMPANY_TERMS if term in text)
+    auto_parts_hits = sum(1 for term in INDUSTRY_TERMS if term in text)
+    factory_hits = sum(1 for term in (
+        "factory", "manufacturer", "manufacturing", "production", "plant",
+        "工厂", "生产厂家", "制造厂", "制造商"
+    ) if term in text)
     china_hits = sum(1 for term in CHINA_SIGNALS if term in text)
-    # Discovery is intentionally broader than final acceptance. Require an
-    # industrial signal, but let profile enrichment verify China and B2B fit;
-    # search snippets often omit a company's headquarters or buyer role.
-    if not industry_hits:
+    # Search only the requested auto-parts factory segment. Do not gate on
+    # purchasing roles, export/import terms, or a preferred Chinese province.
+    if not auto_parts_hits:
         return 0
-    # Strongly prioritize China/Jiangsu evidence without requiring it in the
-    # snippet. The final relevant_social_profile check remains strict.
-    priority_hits = sum(1 for term in PRIORITY_REGION_SIGNALS if term in text)
-    return industry_hits * 5 + buyer_hits * 4 + company_hits * 2 + china_hits * 3 + priority_hits * 4
+    return auto_parts_hits * 5 + factory_hits * 3 + china_hits * 2
 
 
 def discover(p):
