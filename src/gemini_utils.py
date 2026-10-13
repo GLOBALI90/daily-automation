@@ -4,7 +4,7 @@ import os
 import random
 import time
 
-from google import genai
+from google import genai, types
 
 TRANSIENT_CODES = {408, 429, 500, 502, 503, 504}
 
@@ -53,11 +53,16 @@ def generate_text(prompt, *, api_key=None, model=None):
         if candidate and candidate not in models:
             models.append(candidate)
 
-    client = genai.Client(api_key=key)
+    # Bound each network request so transient provider stalls cannot consume the whole workflow timeout.
+    timeout_ms = max(5_000, min(int(os.getenv("GEMINI_TIMEOUT_MS", "15000")), 30_000))
+    client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=timeout_ms))
     last_error = None
 
+    # Keep one fallback only: bounded request time is more valuable than exhausting
+    # every fallback model during a short scheduled automation run.
+    models = models[:2]
     for model_index, candidate in enumerate(models):
-        attempts = 4 if model_index == 0 else 2
+        attempts = 2 if model_index == 0 else 1
         for attempt in range(1, attempts + 1):
             try:
                 response = client.models.generate_content(model=candidate, contents=prompt)
