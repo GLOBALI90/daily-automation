@@ -135,5 +135,12 @@ jobs:
           git config user.name "rozhanglobal-automation"
           git config user.email "actions@users.noreply.github.com"
           git add data/
-          git diff --cached --quiet || git commit -m "Add bounded social provider fallback chain"
-          git push
+          if ! git diff --cached --quiet; then
+            git commit -m "Save automation collection results"
+            # Integrate commits that landed on main while this run was collecting.
+            git fetch origin main
+            git rebase origin/main
+            git push origin HEAD:main
+          else
+            echo "No data changes to save."
+          fi
