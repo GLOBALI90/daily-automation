@@ -142,6 +142,8 @@ PRIORITY_REGION_SIGNALS = ("jiangsu", "suzhou", "nanjing", "wuxi", "changzhou", 
 
 def infer_social_industry(company, website, location, bio):
     text = " ".join([company, website, location, bio]).lower()
+    if any(term in text for term in INDUSTRY_TERMS):
+        return "automotive parts"
     if "petrochemical" in text or "polymer" in text or "feedstock" in text:
         return "petrochemicals"
     if "petroleum" in text or "oil and gas" in text or "oil & gas" in text or "refinery" in text:
