@@ -287,17 +287,38 @@ def main():
 
     done = {key for row in existing if (key := lead_key(row))}
     current_run_id = os.getenv("GITHUB_RUN_ID", "")
-    # Resume older collected leads that have not reached an outreach outcome.
-    # Restrict rows without a stable identity to the current run to avoid repeats.
+    # Only contact leads discovered by this run through the two explicitly
+    # enabled social platforms. Do not drain historical web-search rows from
+    # leads.csv: those rows can be stale, weakly qualified, or unrelated.
     candidates = []
+    skipped_noncurrent = 0
+    skipped_non_social = 0
     for candidate in rows:
-        key = lead_key(candidate)
         is_current = bool(current_run_id and candidate.get("run_id") == current_run_id)
-        is_pending = bool(key and key not in done)
-        if is_current or is_pending:
+        platform = (candidate.get("platform") or "").strip().lower()
+        source = (candidate.get("source") or "").strip().lower()
+        social_url = (candidate.get("social_url") or "").strip().lower()
+        is_allowed_social = (
+            platform in {"facebook", "linkedin"}
+            and source in {"social:facebook", "social:linkedin"}
+            and (
+                ("facebook" in social_url and "linkedin" not in social_url)
+                or ("linkedin.com" in social_url and "facebook" not in social_url)
+            )
+        )
+        if not is_current:
+            skipped_noncurrent += 1
+            continue
+        if not is_allowed_social:
+            skipped_non_social += 1
+            continue
+        key = lead_key(candidate)
+        if key and key not in done:
             candidates.append(candidate)
+
     print(
-        f"OUTREACH_QUEUE pending_candidates={len(candidates)} "
+        f"OUTREACH_QUEUE current_run_social_candidates={len(candidates)} "
+        f"skipped_historical={skipped_noncurrent} skipped_non_social={skipped_non_social} "
         f"already_recorded={len(done)} limit={OUTREACH_LIMIT_PER_RUN}",
         flush=True,
     )
