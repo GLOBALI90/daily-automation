@@ -4,7 +4,8 @@ import os
 import random
 import time
 
-from google import genai, types
+from google import genai
+from google.genai import types
 
 TRANSIENT_CODES = {408, 429, 500, 502, 503, 504}
 
