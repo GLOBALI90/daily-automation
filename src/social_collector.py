@@ -947,7 +947,7 @@ def main():
             fields.append(f)
 
     seen = {
-        (r.get("platform", ""), r.get("social_url", ""))
+        (r.get("platform", ""), r.get("social_url", "").rstrip("/"))
         for r in rows if r.get("social_url")
     }
 
@@ -964,6 +964,9 @@ def main():
     for p, url, query, discovery_method in found:
         if added >= MAX_ITEMS:
             break
+        if (p, url.rstrip("/")) in seen:
+            print(f"Skipping previously stored social profile: platform={p}; url={url}")
+            continue
         indexed = LINKEDIN_SEARCH_RESULTS.get(url.rstrip("/"), {}) if p == "linkedin" else {}
         print(
             "SOCIAL_SOURCE_AUDIT " + json.dumps({
@@ -1022,7 +1025,7 @@ def main():
             print(f"Rejected low-confidence social result: platform={p}; discovered_url={url}; returned_profile_url={returned_url or 'NOT_RETURNED'}")
             continue
 
-        if (p, surl) in seen:
+        if (p, surl.rstrip("/")) in seen:
             continue
 
         row = {f: "" for f in fields}
@@ -1071,7 +1074,7 @@ def main():
         })
 
         rows.append(row)
-        seen.add((p, surl))
+        seen.add((p, surl.rstrip("/")))
         added += 1
 
     with LEADS.open("w", encoding="utf-8", newline="") as f:
