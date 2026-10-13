@@ -47,6 +47,30 @@ class ProviderChainTests(unittest.TestCase):
         apify.assert_not_called()
         sf.assert_not_called()
 
+
+    def test_auto_falls_back_to_linkedin_when_facebook_has_no_candidates(self):
+        linkedin_result = [(
+            "https://www.linkedin.com/company/example-chemical",
+            "China Jiangsu chemical manufacturer",
+            "scrapecreators_linkedin_public_posts_search",
+        )]
+        with patch.object(social, "discover", side_effect=[[], linkedin_result]) as discover:
+            platform, found = social.discover_with_auto_fallback("facebook", True)
+
+        self.assertEqual(platform, "linkedin")
+        self.assertEqual(found, linkedin_result)
+        self.assertEqual(discover.call_count, 2)
+        discover.assert_any_call("facebook")
+        discover.assert_any_call("linkedin")
+
+    def test_manual_platform_does_not_switch_platforms(self):
+        with patch.object(social, "discover", return_value=[]) as discover:
+            platform, found = social.discover_with_auto_fallback("facebook", False)
+
+        self.assertEqual(platform, "facebook")
+        self.assertEqual(found, [])
+        discover.assert_called_once_with("facebook")
+
     def test_empty_responses_do_not_count_as_success(self):
         with (
             patch.object(social, "cloudflare_profile", return_value={}),
