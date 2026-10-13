@@ -1,7 +1,7 @@
 import csv, json, os, re
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse, quote
+from urllib.parse import urlparse, quote
 import requests
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -457,7 +457,7 @@ def get_json(url, headers=None, params=None, timeout=45):
     try:
         r.raise_for_status()
     except requests.HTTPError as exc:
-        detail = (getattr(r, "text", "") or "").replace("\\n", " ")[:250]
+        detail = (getattr(r, "text", "") or "").replace("\n", " ")[:250]
         raise RuntimeError(f"provider_http_{r.status_code}:{detail}") from exc
     data = r.json()
     if isinstance(data, dict) and data.get("success") is False:
