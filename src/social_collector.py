@@ -864,90 +864,46 @@ def main():
             }, ensure_ascii=False)
         )
 
-        if p == "linkedin":
-            # LinkedIn is deliberately handled from public search-index metadata
-            # only. Do not automate profile-page scraping or third-party profile
-            # extraction: this avoids account use, private data, and scraping controls.
-            provider = "PublicSearchIndex"
-            title = val(indexed.get("title"))
-            snippet = val(indexed.get("snippet"))
-            if not title or not snippet:
-                provider_counts["failed"] += 1
-                print("SOCIAL_FETCH_AUDIT " + json.dumps({
-                    "platform": p,
-                    "discovered_url": url,
-                    "provider": provider,
-                    "status": "public_index_missing_title_or_snippet",
-                    "profile_data_fields": []
-                }, ensure_ascii=False))
-                continue
-            data = indexed
-            company = title
-            web = ""
-            loc = "China"
-            contact = title.split(" | LinkedIn")[0].strip()
-            email = phone = followers = verified = ""
-            bio = (snippet + " | Search context: " + query).strip()
-            surl = url
-            returned_url = url
-            errors = []
-            extracted_fields = profile_field_names(
-                company, web, loc, contact, email, phone, bio, followers, verified
-            )
-            fetch_status = "public_index_metadata_only"
-            provider_counts[provider] = provider_counts.get(provider, 0) + 1
+        provider, data, errors = provider_chain(p, url)
+        if not provider:
+            provider_counts["failed"] += 1
             print("SOCIAL_FETCH_AUDIT " + json.dumps({
                 "platform": p,
                 "discovery_method": discovery_method,
                 "discovered_url": url,
                 "profile_url_submitted": url,
-                "profile_url_returned": returned_url,
-                "provider": provider,
-                "status": fetch_status,
-                "profile_data_fields": extracted_fields,
-                "returned_url_present": True
+                "profile_url_returned": "",
+                "provider": "",
+                "status": "provider_failed",
+                "profile_data_fields": [],
+                "errors": errors
             }, ensure_ascii=False))
-        else:
-            provider, data, errors = provider_chain(p, url)
-            if not provider:
-                provider_counts["failed"] += 1
-                print("SOCIAL_FETCH_AUDIT " + json.dumps({
-                    "platform": p,
-                    "discovery_method": discovery_method,
-                    "discovered_url": url,
-                    "profile_url_submitted": url,
-                    "profile_url_returned": "",
-                    "provider": "",
-                    "status": "provider_failed",
-                    "profile_data_fields": [],
-                    "errors": errors
-                }, ensure_ascii=False))
-                print(f"All providers failed for {url}: " + " | ".join(errors))
-                continue
+            print(f"All providers failed for {url}: " + " | ".join(errors))
+            continue
 
-            provider_counts[provider] = provider_counts.get(provider, 0) + 1
-            company, web, loc, contact, email, phone, bio, followers, verified, surl = (
-                normalize_provider(p, provider, data, url)
-            )
-            returned_url = returned_profile_url(provider, p, data)
-            extracted_fields = profile_field_names(
-                company, web, loc, contact, email, phone, bio, followers, verified
-            )
-            fetch_status = (
-                "profile_fields_extracted" if len(extracted_fields) >= 2
-                else "response_without_usable_profile_fields"
-            )
-            print("SOCIAL_FETCH_AUDIT " + json.dumps({
-                "platform": p,
-                "discovery_method": discovery_method,
-                "discovered_url": url,
-                "profile_url_submitted": url,
-                "profile_url_returned": returned_url,
-                "provider": provider,
-                "status": fetch_status,
-                "profile_data_fields": extracted_fields,
-                "returned_url_present": bool(returned_url)
-            }, ensure_ascii=False))
+        provider_counts[provider] = provider_counts.get(provider, 0) + 1
+        company, web, loc, contact, email, phone, bio, followers, verified, surl = (
+            normalize_provider(p, provider, data, url)
+        )
+        returned_url = returned_profile_url(provider, p, data)
+        extracted_fields = profile_field_names(
+            company, web, loc, contact, email, phone, bio, followers, verified
+        )
+        fetch_status = (
+            "profile_fields_extracted" if len(extracted_fields) >= 2
+            else "response_without_usable_profile_fields"
+        )
+        print("SOCIAL_FETCH_AUDIT " + json.dumps({
+            "platform": p,
+            "discovery_method": discovery_method,
+            "discovered_url": url,
+            "profile_url_submitted": url,
+            "profile_url_returned": returned_url,
+            "provider": provider,
+            "status": fetch_status,
+            "profile_data_fields": extracted_fields,
+            "returned_url_present": bool(returned_url)
+        }, ensure_ascii=False))
 
         if not relevant_social_profile(p, surl or url, company, web, loc, bio):
             print(f"Rejected low-confidence social result: platform={p}; discovered_url={url}; returned_profile_url={returned_url or 'NOT_RETURNED'}")
