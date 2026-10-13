@@ -128,6 +128,9 @@ class ProviderChainTests(unittest.TestCase):
                 social, "scrapecreators_profile",
                 return_value={"name": "Example Chemicals", "location": "India", "followers": 20},
             ),
+            # Explicitly reject the first provider's wrong-region profile so
+            # this test verifies fallback to the company-specific Apify actor.
+            patch.object(social, "relevant_social_profile", side_effect=[False, True]),
             patch.object(social, "actor", return_value=company_data) as actor,
             patch.object(social, "socialfetch_profile") as sf,
         ):
