@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       social_platform:
-        description: "Choose auto to alternate focused Facebook and LinkedIn collection"
+        description: "Collect from both Facebook and LinkedIn in auto mode"
         required: false
         type: choice
         options:
@@ -13,12 +13,12 @@ on:
           - linkedin
         default: auto
       social_max_items:
-        description: "Hard-capped at one profile per run to respect the Cloudflare Worker daily limit"
+        description: "Collect up to five valid leads per run; Cloudflare Worker remains capped separately"
         required: false
         type: choice
         options:
-          - "1"
-        default: "1"
+          - "5"
+        default: "5"
 
   # Four scheduled runs per UTC day, spaced six hours apart.
   # Keep aligned with the Cloudflare Worker cap of four Browser Run actions/day.
@@ -55,7 +55,7 @@ jobs:
       - name: Test social provider fallback and response quality
         run: python -m unittest discover -s tests -v
 
-      - name: Collect public social leads (Facebook and LinkedIn; hard cap one profile per run)
+      - name: Collect public social leads from Facebook and LinkedIn (up to five valid leads per run)
         env:
           SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
           APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
@@ -63,7 +63,7 @@ jobs:
           SOCIAL_DEEP_BACKUP_TOKEN: ${{ secrets.SOCIAL_DEEP_BACKUP_TOKEN }}
           SOCIAL_DEEP_BACKUP_URL: https://patient-moon-b87e.mohamadsbrfit760li.workers.dev
           SOCIAL_PLATFORM: ${{ inputs.social_platform || 'auto' }}
-          SOCIAL_MAX_ITEMS: ${{ inputs.social_max_items || '1' }}
+          SOCIAL_MAX_ITEMS: ${{ inputs.social_max_items || '5' }}
         run: python src/social_collector.py
 
       - name: Generate and send B2B outreach (email and WhatsApp enabled; max three leads per run)
