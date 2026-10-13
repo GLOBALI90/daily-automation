@@ -50,8 +50,8 @@ FIELDS = [
 session = requests.Session()
 session.headers.update({"User-Agent": "rozhanglobal-social-collector/1.0"})
 
-# LinkedIn is discovery-only: use search-engine indexed public results and do not
-# automate requests to LinkedIn itself or use third-party profile-scraping APIs.
+# LinkedIn candidates come from the LinkedIn-specific provider search endpoint.
+# Profile enrichment uses the configured Cloudflare/provider fallback chain.
 LINKEDIN_SEARCH_RESULTS = {}
 
 
@@ -298,7 +298,7 @@ def _decodo_google_search(query):
     } for item in organic if isinstance(item, dict)]
 
 
-def _linkedin_indexed_candidates(query):
+def _linkedin_provider_candidates(query):
     """Use the LinkedIn-specific ScrapeCreators public-post search adapter.
 
     This avoids the generic You.com, Decodo Google Search, and SearXNG
@@ -356,7 +356,7 @@ def native_candidates(platform, query):
     if platform == "linkedin":
         # Public search-index results only; no LinkedIn login, session cookies,
         # CAPTCHA bypass, or private/member-only data access.
-        return _linkedin_indexed_candidates(query)
+        return _linkedin_provider_candidates(query)
     raise ValueError(f"Unsupported social platform: {platform}")
 
 
@@ -859,7 +859,7 @@ def main():
                 "search_query": query,
                 "discovery_method": discovery_method,
                 "search_provider": indexed.get("search_provider", ""),
-                "note": "LinkedIn metadata is limited to public search-index title/snippet and URL; the LinkedIn profile page is not fetched."
+                "note": "Public social data only; profile enrichment uses Cloudflare and configured social providers."
             }, ensure_ascii=False)
         )
 
