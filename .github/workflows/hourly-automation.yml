@@ -56,28 +56,6 @@ jobs:
       - name: Test social provider fallback and response quality
         run: python -m unittest discover -s tests -v
 
-      - name: Validate Gemini credentials and model before collection
-        if: false # Temporarily disabled: focused social collection only
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-3.8-flash
-          GEMINI_FALLBACK_MODELS: gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite
-        run: |
-          python - <<'PY'
-          import sys
-          sys.path.insert(0, "src")
-          from gemini_utils import generate_text
-
-          try:
-              text = generate_text("Reply with exactly: OK")
-          except Exception as exc:
-              print(f"Gemini preflight failed after retries/fallback: {type(exc).__name__}: {exc}")
-              raise SystemExit(1) from None
-          if not text:
-              raise SystemExit("Gemini preflight returned no usable text.")
-          print("Gemini authentication and generation preflight succeeded.")
-          PY
-
       - name: Collect public social leads (native platform/provider discovery; hard cap one profile per run)
         env:
           SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
@@ -88,36 +66,6 @@ jobs:
           SOCIAL_PLATFORM: ${{ inputs.social_platform || 'auto' }}
           SOCIAL_MAX_ITEMS: ${{ inputs.social_max_items || '1' }}
         run: python src/social_collector.py
-
-      - name: Collect leads with Gemini-planned search
-        # A manual network-specific test should isolate that network instead of
-        # failing the run because the unrelated general lead collector found no fresh leads.
-        if: github.event_name != 'workflow_dispatch' || inputs.social_platform == 'auto'
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-3.8-flash
-          GEMINI_FALLBACK_MODELS: gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite
-          YDC_API_KEY: ${{ secrets.YDC_API_KEY }}
-          SEARXNG_URL: ${{ secrets.SEARXNG_URL }}
-        run: echo "General web lead search disabled during Facebook/LinkedIn-only collection"
-
-      - name: Generate AI outreach and send Gmail
-        if: false # Temporarily disabled: focused social collection only
-        timeout-minutes: 6
-        env:
-          PYTHONUNBUFFERED: "1"
-          GEMINI_TIMEOUT_MS: "15000"
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-3.8-flash
-          GEMINI_FALLBACK_MODELS: gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite
-          SEND_EMAILS: ${{ github.event_name == 'workflow_dispatch' && inputs.send_emails || false }}
-          GMAIL_USERNAME: 'saberi.export.import@gmail.com'
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          WHATSAPP_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.send_whatsapp || false }}
-          WAHA_URL: ${{ secrets.WAHA_URL }}
-          WAHA_API_KEY: ${{ secrets.WAHA_API_KEY }}
-          WAHA_SESSION: ${{ secrets.WAHA_SESSION }}
-        run: python -u src/process_leads.py
 
       - name: Save results
         if: always()
