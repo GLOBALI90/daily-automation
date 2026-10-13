@@ -262,14 +262,14 @@ class ProviderChainTests(unittest.TestCase):
 
     def test_discover_returns_multiple_ranked_candidates_across_queries(self):
         first = {
-            "url": "https://www.linkedin.com/company/jiangsu-chemical-maker",
-            "title": "Jiangsu Chemical Maker",
-            "content": "Industrial chemical manufacturer in Jiangsu China",
+            "url": "https://www.linkedin.com/company/jiangsu-auto-parts-maker",
+            "title": "Jiangsu Auto Parts Factory",
+            "content": "Automotive components manufacturer and factory in Jiangsu China",
         }
         second = {
-            "url": "https://www.linkedin.com/company/china-steel-supplier",
-            "title": "China Steel Supplier",
-            "content": "Steel manufacturer and industrial supplier in China",
+            "url": "https://www.linkedin.com/company/china-engine-components",
+            "title": "China Engine Components Manufacturer",
+            "content": "Chinese engine parts factory and automotive components production",
         }
         with (
             patch.object(social, "NATIVE_QUERIES", {"linkedin": ["query one", "query two"]}),
