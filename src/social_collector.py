@@ -351,7 +351,7 @@ def _linkedin_provider_candidates(query):
         out.append({
             "url": url,
             "title": title,
-            "content": " ".join([title, snippet, query]),
+            "content": " ".join([title, snippet]),
             "search_provider": "ScrapeCreators LinkedIn Search",
         })
     print(f"LinkedIn provider search: results={len(posts)}; candidate_profiles={len(out)}")
