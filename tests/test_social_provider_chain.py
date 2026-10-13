@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import social_collector as social
+import gemini_utils
 
 
 class ProviderChainTests(unittest.TestCase):
