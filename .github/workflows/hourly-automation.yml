@@ -67,6 +67,7 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Validate Gemini credentials and model before collection
+        if: false # Temporarily disabled: focused social collection only
         if: github.event_name != 'workflow_dispatch' || inputs.social_platform == 'auto'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -115,6 +116,7 @@ jobs:
         run: echo "General web lead search disabled during Facebook/LinkedIn-only collection"
 
       - name: Generate AI outreach and send Gmail
+        if: false # Temporarily disabled: focused social collection only
         if: github.event_name != 'workflow_dispatch' || inputs.social_platform == 'auto'
         timeout-minutes: 6
         env:
