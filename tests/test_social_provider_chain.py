@@ -110,6 +110,37 @@ class ProviderChainTests(unittest.TestCase):
             ["gemini-3.6-flash", "gemini-3.6-flash", "gemini-3.8-flash"],
         )
 
+    def test_linkedin_company_uses_company_actor_and_skips_unsupported_worker(self):
+        company_url = "https://www.linkedin.com/company/jiangsu-example-chemicals"
+        company_data = [{
+            "name": "Jiangsu Example Chemicals",
+            "website": "https://example.cn",
+            "headquarters": "Jiangsu, China",
+            "description": "Industrial chemical manufacturer and supplier",
+            "industry": "Chemical Manufacturing",
+            "followersCount": 120,
+            "url": company_url,
+        }]
+
+        with (
+            patch.object(social, "cloudflare_profile") as cf,
+            patch.object(
+                social, "scrapecreators_profile",
+                return_value={"name": "Example Chemicals", "location": "India", "followers": 20},
+            ),
+            patch.object(social, "actor", return_value=company_data) as actor,
+            patch.object(social, "socialfetch_profile") as sf,
+        ):
+            provider, data, errors = social.provider_chain("linkedin", company_url)
+
+        self.assertEqual(provider, "Apify")
+        self.assertEqual(data, company_data)
+        actor.assert_called_once_with(
+            "linkedin_company", {"companies": [company_url]}
+        )
+        cf.assert_not_called()
+        sf.assert_not_called()
+
     def test_empty_responses_do_not_count_as_success(self):
         with (
             patch.object(social, "cloudflare_profile", return_value={}),
