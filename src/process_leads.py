@@ -235,12 +235,21 @@ def send_whatsapp(raw_number, content, attempts=1):
             if not ready:
                 return "waha_session_not_ready"
 
-            check_number = requests.post(
-                f"{base}/api/{quote_component(session_name)}/checkNumberStatus",
+            # Current WAHA API exposes contact existence as a GET endpoint.
+            # Keep a read-only legacy fallback for older WAHA deployments.
+            check_number = requests.get(
+                f"{base}/api/contacts/check-exists",
                 headers=headers,
-                json={"phoneNumber": digits},
+                params={"phone": digits, "session": session_name},
                 timeout=10,
             )
+            if check_number.status_code == 404:
+                check_number = requests.get(
+                    f"{base}/api/checkNumberStatus",
+                    headers=headers,
+                    params={"phone": digits, "session": session_name},
+                    timeout=10,
+                )
             check_number.raise_for_status()
             number_data = check_number.json()
             if isinstance(number_data, dict) and (
