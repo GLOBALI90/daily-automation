@@ -57,7 +57,7 @@ jobs:
                   print(f"{label}_REQUEST_ERROR={type(exc).__name__}")
                   return None, ""
 
-          # This GET may wake a sleeping host, but it never sends a WhatsApp message.
+          # Read-only probe: Blitz documents that automated requests do not wake free sleeping apps.
           get_status(base, "WAHA_BASE")
           session_url = base + "/api/sessions/" + quote(session, safe="")
           status, body = get_status(session_url, "WAHA_SESSION")
