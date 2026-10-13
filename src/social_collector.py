@@ -1,7 +1,7 @@
 import csv, json, os, re
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse, urlunparse, quote
 import requests
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,6 +83,16 @@ def handle_from_url(u):
         } else (parts[0] if parts else "")
     except Exception:
         return ""
+
+
+def canonical_linkedin_url(url):
+    """Normalize localized LinkedIn hostnames before sending URLs to providers."""
+    parsed = urlparse(val(url))
+    host = (parsed.hostname or "").lower()
+    if host == "linkedin.com" or host.endswith(".linkedin.com"):
+        path = parsed.path.rstrip("/")
+        return f"https://www.linkedin.com{path}/" if path else "https://www.linkedin.com/"
+    return val(url)
 
 
 def good(p, u):
@@ -342,6 +352,7 @@ def _linkedin_provider_candidates(query):
         url = val(author.get("url") or author.get("profileUrl")).split("?")[0].rstrip("/")
         if not url or "linkedin.com" not in domain(url).lower():
             continue
+        url = canonical_linkedin_url(url).rstrip("/")
         path = urlparse(url).path.lower()
         if not (path.startswith("/in/") or path.startswith("/company/")) or url in seen:
             continue
@@ -443,7 +454,11 @@ def get_json(url, headers=None, params=None, timeout=45):
         params=params or {},
         timeout=timeout
     )
-    r.raise_for_status()
+    try:
+        r.raise_for_status()
+    except requests.HTTPError as exc:
+        detail = (getattr(r, "text", "") or "").replace("\\n", " ")[:250]
+        raise RuntimeError(f"provider_http_{r.status_code}:{detail}") from exc
     data = r.json()
     if isinstance(data, dict) and data.get("success") is False:
         raise RuntimeError("provider_returned_success_false")
@@ -457,6 +472,7 @@ def scrapecreators_profile(p, url):
     headers = {"x-api-key": SCRAPECREATORS}
 
     if p == "linkedin":
+        url = canonical_linkedin_url(url)
         endpoint = (
             "https://api.scrapecreators.com/v1/linkedin/company"
             if "/company/" in urlparse(url).path.lower()
@@ -518,20 +534,26 @@ def actor(p, payload):
         json=payload,
         timeout=180
     )
-    r.raise_for_status()
+    try:
+        r.raise_for_status()
+    except requests.HTTPError as exc:
+        detail = (getattr(r, "text", "") or "").replace("\\n", " ")[:250]
+        raise RuntimeError(f"apify_http_{r.status_code}:{detail}") from exc
     data = r.json()
     return data if isinstance(data, list) else data.get("items", [])
 
 
 def apify_profile(p, url):
     if p == "linkedin":
+        url = canonical_linkedin_url(url)
         if "/company/" in urlparse(url).path.lower():
             # Company pages require HarvestAPI's company actor and its
             # documented "companies" input, not the person-profile actor.
             return actor("linkedin_company", {"companies": [url]})
+        # Use the actor schema's explicit URL field instead of the mixed URL/identifier field.
         return actor(p, {
-            "profileScraperMode": "Profile details no email",
-            "queries": [url]
+            "profileScraperMode": "Profile details no email ($4 per 1k)",
+            "urls": [canonical_linkedin_url(url)]
         })
     if p == "facebook":
         return actor(p, {"startUrls": [{"url": url}]})
