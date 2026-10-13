@@ -176,6 +176,9 @@ def _waha_headers():
 def send_whatsapp(raw_number, content, attempts=1):
     if os.getenv("WHATSAPP_ENABLED", "false").lower() != "true":
         return "draft_only"
+    if os.getenv("WAHA_READY", "").strip().lower() == "false":
+        print("WhatsApp skipped: WAHA preflight did not confirm a WORKING session.")
+        return "waha_preflight_unavailable"
     base = os.getenv("WAHA_URL", "").strip().rstrip("/")
     session_name = os.getenv("WAHA_SESSION", "default").strip()
     api_key = os.getenv("WAHA_API_KEY", "").strip()
