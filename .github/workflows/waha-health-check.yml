@@ -1,0 +1,81 @@
+name: WAHA Connection Health Check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  waha-health-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check WAHA configuration without sending messages
+        env:
+          WAHA_URL: ${{ secrets.WAHA_URL }}
+          WAHA_SESSION: ${{ secrets.WAHA_SESSION }}
+          WAHA_API_KEY: ${{ secrets.WAHA_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import quote
+          from urllib.request import Request, urlopen
+
+          base = os.environ.get("WAHA_URL", "").strip().rstrip("/")
+          session = os.environ.get("WAHA_SESSION", "").strip()
+          api_key = os.environ.get("WAHA_API_KEY", "").strip()
+
+          missing = [name for name, value in (
+              ("WAHA_URL", base),
+              ("WAHA_SESSION", session),
+              ("WAHA_API_KEY", api_key),
+          ) if not value]
+          if missing:
+              print("CONFIG_MISSING: " + ", ".join(missing))
+              raise SystemExit(1)
+
+          if "/api/" in base or base.endswith("/api"):
+              print("CONFIG_WARNING: WAHA_URL should be the service base URL, without an /api suffix.")
+
+          headers = {"X-Api-Key": api_key, "Accept": "application/json"}
+
+          def get_status(url, label):
+              request = Request(url, headers=headers, method="GET")
+              try:
+                  with urlopen(request, timeout=18) as response:
+                      body = response.read(65536).decode("utf-8", errors="replace")
+                      print(f"{label}_HTTP_STATUS={response.status}")
+                      return response.status, body
+              except HTTPError as exc:
+                  print(f"{label}_HTTP_STATUS={exc.code}")
+                  return exc.code, ""
+              except (URLError, TimeoutError, OSError) as exc:
+                  # Do not print exception details: they can contain sensitive URLs.
+                  print(f"{label}_REQUEST_ERROR={type(exc).__name__}")
+                  return None, ""
+
+          # This GET may wake a sleeping host, but it never sends a WhatsApp message.
+          get_status(base, "WAHA_BASE")
+          session_url = base + "/api/sessions/" + quote(session, safe="")
+          status, body = get_status(session_url, "WAHA_SESSION")
+
+          if status is None or status in (401, 403, 404) or status >= 500:
+              print("RESULT=CHECK_FAILED")
+              raise SystemExit(1)
+
+          try:
+              data = json.loads(body)
+              state = str(data.get("status", "unknown")).upper() if isinstance(data, dict) else "unknown"
+              print(f"WAHA_SESSION_STATE={state}")
+              if state == "WORKING":
+                  print("RESULT=CONNECTED_AND_WORKING")
+              else:
+                  print("RESULT=REACHABLE_BUT_SESSION_NOT_WORKING")
+                  raise SystemExit(1)
+          except json.JSONDecodeError:
+              print("RESULT=REACHABLE_BUT_SESSION_RESPONSE_NOT_JSON")
+              raise SystemExit(1)
+          PY
