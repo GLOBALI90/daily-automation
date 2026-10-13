@@ -417,6 +417,11 @@ def discover(p):
             if current is None or score > current[0]:
                 ranked_by_url[u] = candidate
 
+        # Stop querying this platform as soon as the first query has enough
+        # candidates, reducing repeated provider calls and preserving API quota.
+        if len(ranked_by_url) >= MAX_ITEMS:
+            break
+
     ranked = sorted(ranked_by_url.values(), key=lambda item: item[0], reverse=True)
     # Gather a small candidate pool from each enabled platform. Final profile
     # validation remains strict; the main loop stops after five accepted leads.
