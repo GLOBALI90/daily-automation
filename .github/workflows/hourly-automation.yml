@@ -69,7 +69,7 @@ jobs:
       - name: Generate and send B2B outreach (email and WhatsApp enabled; max three leads per run)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.8-flash' }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.6-flash' }}
           SEND_EMAILS: "true"
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           WHATSAPP_ENABLED: "true"
