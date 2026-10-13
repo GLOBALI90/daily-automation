@@ -537,7 +537,7 @@ def actor(p, payload):
     try:
         r.raise_for_status()
     except requests.HTTPError as exc:
-        detail = (getattr(r, "text", "") or "").replace("\\n", " ")[:250]
+        detail = (getattr(r, "text", "") or "").replace("\n", " ")[:250]
         raise RuntimeError(f"apify_http_{r.status_code}:{detail}") from exc
     data = r.json()
     return data if isinstance(data, list) else data.get("items", [])
