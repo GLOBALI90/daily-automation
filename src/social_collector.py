@@ -730,17 +730,17 @@ def extract_public_contacts(text, email="", phone=""):
     """Extract only visibly published email/phone details from a public profile bio."""
     source = val(text)
     email_value = val(email)
-    if not re.search(r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}$", email_value, re.I):
-        match = re.search(r"(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b", source)
+    if not re.search(r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$", email_value, re.I):
+        match = re.search(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", source)
         email_value = match.group(0).rstrip(".,;:") if match else ""
 
     # Require a nearby label for WhatsApp so IDs, follower counts, and unrelated
     # numbers are not accidentally treated as consent-ready contact details.
     wa_match = re.search(
-        r"(?i)(?:whats\\s?app|wa\\.me|whatsapp number|whatsapp contact)\\s*[:：\\-]?\\s*(\\+?\\d[\\d ().\\-]{7,}\\d)",
+        r"(?i)(?:whats\s?app|wa\.me|whatsapp number|whatsapp contact)\s*[:：\-]?\s*(\+?\d[\d ().\-]{7,}\d)",
         source,
     )
-    whatsapp = re.sub(r"[\\s().-]", "", wa_match.group(1)) if wa_match else ""
+    whatsapp = re.sub(r"[\s().-]", "", wa_match.group(1)) if wa_match else ""
     if whatsapp.startswith("00"):
         whatsapp = "+" + whatsapp[2:]
     if whatsapp and not whatsapp.startswith("+"):
@@ -749,10 +749,10 @@ def extract_public_contacts(text, email="", phone=""):
     phone_value = val(phone)
     if not phone_value:
         phone_match = re.search(
-            r"(?i)(?:phone|telephone|tel|mobile|contact number)\\s*[:：\\-]?\\s*(\\+?\\d[\\d ().\\-]{7,}\\d)",
+            r"(?i)(?:phone|telephone|tel|mobile|contact number)\s*[:：\-]?\s*(\+?\d[\d ().\-]{7,}\d)",
             source,
         )
-        phone_value = re.sub(r"\\s+", " ", phone_match.group(1)).strip() if phone_match else ""
+        phone_value = re.sub(r"\s+", " ", phone_match.group(1)).strip() if phone_match else ""
     if not phone_value and whatsapp:
         phone_value = whatsapp
     return email_value, whatsapp, phone_value
