@@ -91,16 +91,23 @@ def good(p, u):
         for x in ["/search", "/explore", "/hashtag", "/jobs"]
     )
 
+# Strict target: Chinese B2B industrial companies and relevant purchasing professionals only.
+# No broad consumer, lifestyle, entertainment, unrelated tech, or generic lead collection.
 INDUSTRY_TERMS = (
-    "chemical", "petrochemical", "petroleum", "oil and gas", "oil & gas",
-    "refinery", "steel", "metal", "industrial", "manufacturer", "manufacturing",
-    "factory", "polymer", "resin", "fertilizer", "solvent", "solar", "wind",
-    "battery", "renewable energy", "raw material", "feedstock"
+    "chemical", "chemicals", "petrochemical", "petrochemicals", "petroleum",
+    "oil and gas", "oil & gas", "refinery", "steel", "metal", "polymer",
+    "resin", "fertilizer", "solvent", "raw material", "raw materials",
+    "feedstock", "industrial materials", "industrial chemical"
 )
-BUYER_TERMS = (
+COMPANY_TERMS = (
     "company", "group", "limited", "ltd", "manufacturer", "manufacturing",
-    "factory", "industrial", "supplier", "production", "procurement",
-    "importer", "refinery", "plant", "products", "materials"
+    "factory", "supplier", "production", "importer", "exporter", "refinery",
+    "plant", "materials", "chemical industry", "industrial"
+)
+BUYER_ROLE_TERMS = (
+    "procurement", "purchasing", "purchase manager", "buyer", "sourcing",
+    "supply chain", "import manager", "procurement manager", "purchasing manager",
+    "commercial manager", "trading", "raw material buyer"
 )
 CHINA_SIGNALS = (
     "china", "chinese", "jiangsu", "guangdong", "zhejiang", "shandong",
@@ -111,6 +118,8 @@ CHINA_SIGNALS = (
     "cangzhou", "dalian", "shenyang", "yingkou", "xiamen", "quanzhou",
     "fuzhou", "wuhan", "yichang"
 )
+PRIORITY_REGION_SIGNALS = ("jiangsu", "suzhou", "nanjing", "wuxi", "changzhou", "nantong")
+
 
 def infer_social_industry(company, website, location, bio):
     text = " ".join([company, website, location, bio]).lower()
@@ -120,8 +129,6 @@ def infer_social_industry(company, website, location, bio):
         return "petroleum products"
     if "steel" in text or "metal" in text:
         return "steel"
-    if "renewable" in text or "solar" in text or "wind energy" in text or "battery" in text:
-        return "renewable energy"
     if "chemical" in text or "solvent" in text or "fertilizer" in text or "resin" in text:
         return "chemicals"
     return ""
@@ -129,29 +136,31 @@ def infer_social_industry(company, website, location, bio):
 
 def relevant_social_profile(platform, url, company, website, location, bio):
     text = " ".join([url, company, website, location, bio]).lower()
-    host = domain(url)
     if not company or company.lower() in {"unknown", "none", "n/a", "facebook", "linkedin"}:
         return False
     if not any(term in text for term in INDUSTRY_TERMS):
         return False
-    if not any(term in text for term in BUYER_TERMS):
+    china_match = any(signal in text for signal in CHINA_SIGNALS) or domain(url).endswith(".cn")
+    if not china_match:
         return False
-    if not (host.endswith(".cn") or any(signal in text for signal in CHINA_SIGNALS)):
+    # A corporate industrial supplier/manufacturer or an actual purchasing/trade role
+    # is required; generic personal accounts and unrelated company pages are rejected.
+    if not (
+        any(term in text for term in COMPANY_TERMS)
+        or any(term in text for term in BUYER_ROLE_TERMS)
+    ):
         return False
     return True
 
 
 NATIVE_QUERIES = {
     "linkedin": [
-        "chemical petrochemical steel procurement buyer China",
+        "China Jiangsu chemical petrochemical procurement purchasing manager importer",
+        "China industrial raw materials steel chemical supplier buyer",
     ],
     "facebook": [
-        "chemical manufacturer China",
-        "petrochemical company China",
-    ],
-    "x": [
-        "chemical petrochemical steel industrial China",
-        "chemical importer manufacturer China",
+        "Jiangsu China chemical manufacturer supplier",
+        "China petrochemical industrial raw materials company",
     ],
 }
 
@@ -365,11 +374,14 @@ def social_candidate_score(platform, result, url):
     snippet = val(result.get("content") or result.get("snippet") or result.get("description"))
     text = " ".join([title, snippet, url]).lower()
     industry_hits = sum(1 for term in INDUSTRY_TERMS if term in text)
-    buyer_hits = sum(1 for term in BUYER_TERMS if term in text)
+    buyer_hits = sum(1 for term in BUYER_ROLE_TERMS if term in text)
+    company_hits = sum(1 for term in COMPANY_TERMS if term in text)
     china_hits = sum(1 for term in CHINA_SIGNALS if term in text)
-    if not industry_hits or not (buyer_hits or china_hits):
+    if not industry_hits or not china_hits or not (buyer_hits or company_hits):
         return 0
-    return industry_hits * 4 + buyer_hits * 2 + china_hits
+    # Prefer Jiangsu-linked targets, then the clearest B2B purchasing/company signals.
+    priority_hits = sum(1 for term in PRIORITY_REGION_SIGNALS if term in text)
+    return industry_hits * 5 + buyer_hits * 4 + company_hits * 2 + china_hits + priority_hits * 3
 
 
 def discover(p):
