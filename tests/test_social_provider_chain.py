@@ -227,6 +227,27 @@ class ProviderChainTests(unittest.TestCase):
         )
         self.assertGreater(score, 0)
 
+
+    def test_extract_public_email_and_labeled_whatsapp_from_bio(self):
+        email, whatsapp, phone = social.extract_public_contacts(
+            "OEM auto parts. Contact: sales@example.cn | WhatsApp: +86 189 9845 3346",
+            "",
+            "",
+        )
+        self.assertEqual(email, "sales@example.cn")
+        self.assertEqual(whatsapp, "+8618998453346")
+        self.assertEqual(phone, "+8618998453346")
+
+    def test_contact_extraction_does_not_treat_unlabeled_number_as_whatsapp(self):
+        email, whatsapp, phone = social.extract_public_contacts(
+            "Auto parts manufacturer, 6 followers, 2011",
+            "",
+            "",
+        )
+        self.assertEqual(email, "")
+        self.assertEqual(whatsapp, "")
+        self.assertEqual(phone, "")
+
     def test_linkedin_search_query_is_not_counted_as_profile_evidence(self):
         class Response:
             def raise_for_status(self):
