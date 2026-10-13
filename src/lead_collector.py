@@ -285,8 +285,10 @@ def you_search(query, num=RESULTS_PER_QUERY, exclude_domains=None):
     key = os.getenv("YDC_API_KEY")
     if not key:
         raise RuntimeError("YDC_API_KEY is missing")
-    r = requests.get(
-        "https://api.you.com/v1/search",
+    # You.com Web Search API is hosted at ydc-index.io. Use POST for
+    # JSON request bodies; api.you.com is for Answer/Research APIs.
+    r = requests.post(
+        "https://ydc-index.io/v1/search",
         json={"query": query, "count": min(num, 100), "exclude_domains": (exclude_domains or [])[:500]},
         headers={"X-API-Key": key, "Accept": "application/json", "Content-Type": "application/json"},
         timeout=30,
