@@ -27,11 +27,9 @@ RUN_ID = os.getenv(
 )
 NOW = datetime.now(timezone.utc).isoformat()
 
-PLATFORMS = ["linkedin", "facebook", "x"]
-# AUTO only rotates platforms with a configured native discovery adapter.
-# LinkedIn remains manually selectable for a clear diagnostic, but is not
-# silently replaced by web search.
-AUTO_PLATFORMS = ["facebook", "x", "linkedin"]
+PLATFORMS = ["linkedin", "facebook"]
+# AUTO rotates only the two requested platforms during focused collection.
+AUTO_PLATFORMS = ["facebook", "linkedin"]
 
 ACTORS = {
     "linkedin": "harvestapi~linkedin-profile-scraper",
@@ -159,7 +157,7 @@ NATIVE_QUERIES = {
 }
 
 DISCOVERY_METHODS = {
-    "linkedin": "public_search_engine_indexed_linkedin_profiles",
+    "linkedin": "scrapecreators_linkedin_public_posts_search",
     "facebook": "scrapecreators_facebook_ad_library_company_search",
     "x": "apify_x_native_search",
 }
@@ -453,11 +451,12 @@ def scrapecreators_profile(p, url):
     headers = {"x-api-key": SCRAPECREATORS}
 
     if p == "linkedin":
-        return get_json(
-            "https://api.scrapecreators.com/v1/linkedin/profile",
-            headers=headers,
-            params={"url": url}
+        endpoint = (
+            "https://api.scrapecreators.com/v1/linkedin/company"
+            if "/company/" in urlparse(url).path.lower()
+            else "https://api.scrapecreators.com/v1/linkedin/profile"
         )
+        return get_json(endpoint, headers=headers, params={"url": url})
 
     if p == "facebook":
         return get_json(
@@ -833,11 +832,11 @@ def normalize_provider(p, provider, data, fallback):
 
 
 def main():
-    # Four scheduled runs/day at 00, 06, 12, and 18 UTC. Allocate 2 Facebook,
-    # #1 X, and #1 LinkedIn; one profile per run shares the Worker cap of 4/day.
+    # Four scheduled runs/day, split evenly between Facebook and LinkedIn.
+    # One profile per run keeps within the Worker cap of four Browser Run actions/day.
     utc_hour = datetime.now(timezone.utc).hour
     scheduled_slot = min(3, utc_hour // 6)
-    auto_schedule = ["facebook", "x", "linkedin", "facebook"]
+    auto_schedule = ["facebook", "linkedin", "facebook", "linkedin"]
     p = PLATFORM if PLATFORM in PLATFORMS else auto_schedule[scheduled_slot]
     found = discover(p)
 
