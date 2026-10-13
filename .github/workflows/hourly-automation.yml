@@ -19,6 +19,11 @@ on:
         options:
           - "5"
         default: "5"
+      validation_only:
+        description: "Run syntax and unit tests only; skip all external APIs, collection, outreach, and data writes"
+        required: false
+        type: boolean
+        default: false
 
   # Four scheduled runs per UTC day, spaced six hours apart.
   # Keep aligned with the Cloudflare Worker cap of four Browser Run actions/day.
@@ -56,6 +61,7 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Collect public social leads from Facebook and LinkedIn (up to five valid leads per run)
+        if: ${{ !inputs.validation_only }}
         env:
           SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
           APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
@@ -67,6 +73,7 @@ jobs:
         run: python src/social_collector.py
 
       - name: Generate and send B2B outreach (email and WhatsApp enabled; max three leads per run)
+        if: ${{ !inputs.validation_only }}
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.6-flash' }}
@@ -79,7 +86,7 @@ jobs:
         run: python src/process_leads.py
 
       - name: Save results
-        if: always()
+        if: ${{ always() && !inputs.validation_only }}
         run: |
           git config user.name "rozhanglobal-automation"
           git config user.email "actions@users.noreply.github.com"
