@@ -1005,6 +1005,28 @@ def main():
         if f not in fields:
             fields.append(f)
 
+    # Backfill contact fields from already-stored public bios too. This matters
+    # when a profile was collected before the extractor existed and is now deduped.
+    contact_backfilled = 0
+    for stored in rows:
+        bio_text = stored.get("social_bio") or stored.get("evidence") or ""
+        if not bio_text:
+            continue
+        email_value, whatsapp_value, phone_value = extract_public_contacts(
+            bio_text, stored.get("email", ""), stored.get("phone", "")
+        )
+        changed = False
+        for field, value in (
+            ("email", email_value), ("whatsapp", whatsapp_value), ("phone", phone_value)
+        ):
+            if value and not (stored.get(field) or "").strip():
+                stored[field] = value
+                changed = True
+        if changed:
+            contact_backfilled += 1
+    if contact_backfilled:
+        print(f"PUBLIC_CONTACT_BACKFILL updated_existing_leads={contact_backfilled}")
+
     seen = {
         (r.get("platform", ""), r.get("social_url", "").rstrip("/"))
         for r in rows if r.get("social_url")
