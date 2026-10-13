@@ -300,74 +300,53 @@ def _decodo_google_search(query):
 
 
 def _linkedin_indexed_candidates(query):
-    """Find public LinkedIn URLs from search indexes only; never fetch LinkedIn profiles."""
-    import lead_collector as search_provider
+    """Use the LinkedIn-specific ScrapeCreators public-post search adapter.
 
-    # One bounded query per run; provider fallback is cheaper than issuing
-    # several near-duplicate paid searches.
-    query_variants = [
-        'site:linkedin.com/in (procurement OR purchasing OR sourcing OR buyer) '
-        '(chemical OR petrochemical OR steel OR industrial) China ' + query,
-    ]
+    This avoids the generic You.com, Decodo Google Search, and SearXNG
+    discovery chain. Only LinkedIn post authors are returned as candidates.
+    """
+    if not SCRAPECREATORS:
+        raise RuntimeError("SCRAPECREATORS_API_KEY missing for LinkedIn provider search")
+    response = session.get(
+        "https://api.scrapecreators.com/v1/linkedin/search/posts",
+        headers={"x-api-key": SCRAPECREATORS, "Accept": "application/json"},
+        params={"query": query},
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if isinstance(payload, dict) and payload.get("success") is False:
+        raise RuntimeError("ScrapeCreators LinkedIn search returned success=false")
+    posts = payload.get("posts", []) if isinstance(payload, dict) else []
     out = []
     seen = set()
-    last_error = None
-
-    for search_query in query_variants:
-        results = []
-        provider = ""
-        try:
-            results = _decodo_google_search(search_query)
-            provider = "Decodo Google Search"
-        except Exception as decodo_error:
-            last_error = decodo_error
-            print(f"LinkedIn indexed search via Decodo failed: {type(decodo_error).__name__}; trying You.com")
-            try:
-                results = search_provider.you_search(search_query, num=10)
-                provider = "You.com"
-            except Exception as primary_error:
-                last_error = primary_error
-                print(f"LinkedIn indexed search via You.com failed: {type(primary_error).__name__}; trying SearXNG fallbacks")
-                try:
-                    # Reuse the repository's bounded SearXNG fallback chain.
-                    from run_collector_resilient import resilient_searx_search
-                    results = resilient_searx_search(search_query, num=10)
-                    provider = "SearXNG"
-                except Exception as fallback_error:
-                    last_error = fallback_error
-                    print(f"LinkedIn indexed search fallback failed: {type(fallback_error).__name__}: {fallback_error}")
-                    continue
-
-        for item in results if isinstance(results, list) else []:
-            if not isinstance(item, dict):
-                continue
-            url = val(item.get("url")).split("?")[0].rstrip("/")
-            if not url or "linkedin.com" not in domain(url).lower():
-                continue
-            path = urlparse(url).path.lower()
-            if not (path.startswith("/in/") or path.startswith("/company/")):
-                continue
-            if url in seen:
-                continue
-            seen.add(url)
-            title = val(item.get("title"))
-            snippet = val(item.get("content") or item.get("snippet") or item.get("description"))
-            LINKEDIN_SEARCH_RESULTS[url] = {
-                "title": title,
-                "snippet": snippet,
-                "search_provider": provider,
-            }
-            out.append({
-                "url": url,
-                "title": title,
-                "content": " ".join([snippet, query]),
-                "search_provider": provider,
-            })
-        if out:
-            break
-
-    if not out and last_error:
-        print(f"LinkedIn indexed search ended without results: {type(last_error).__name__}: {last_error}")
+    for post in posts if isinstance(posts, list) else []:
+        if not isinstance(post, dict):
+            continue
+        author = post.get("author") or {}
+        if not isinstance(author, dict):
+            author = {}
+        url = val(author.get("url") or author.get("profileUrl")).split("?")[0].rstrip("/")
+        if not url or "linkedin.com" not in domain(url).lower():
+            continue
+        path = urlparse(url).path.lower()
+        if not (path.startswith("/in/") or path.startswith("/company/")) or url in seen:
+            continue
+        seen.add(url)
+        title = val(author.get("name") or post.get("authorName"))
+        snippet = val(post.get("description") or post.get("text") or post.get("content"))
+        LINKEDIN_SEARCH_RESULTS[url] = {
+            "title": title,
+            "snippet": snippet,
+            "search_provider": "ScrapeCreators LinkedIn Search",
+        }
+        out.append({
+            "url": url,
+            "title": title,
+            "content": " ".join([title, snippet, query]),
+            "search_provider": "ScrapeCreators LinkedIn Search",
+        })
+    print(f"LinkedIn provider search: results={len(posts)}; candidate_profiles={len(out)}")
     return out
 
 def native_candidates(platform, query):
