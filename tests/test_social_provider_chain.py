@@ -234,5 +234,37 @@ class ProviderChainTests(unittest.TestCase):
         self.assertEqual(social.social_candidate_score("linkedin", results[0], results[0]["url"]), 0)
 
 
+    def test_discover_returns_multiple_ranked_candidates_across_queries(self):
+        first = {
+            "url": "https://www.linkedin.com/company/jiangsu-chemical-maker",
+            "title": "Jiangsu Chemical Maker",
+            "content": "Industrial chemical manufacturer in Jiangsu China",
+        }
+        second = {
+            "url": "https://www.linkedin.com/company/china-steel-supplier",
+            "title": "China Steel Supplier",
+            "content": "Steel manufacturer and industrial supplier in China",
+        }
+        with (
+            patch.object(social, "NATIVE_QUERIES", {"linkedin": ["query one", "query two"]}),
+            patch.object(social, "native_candidates", side_effect=[[first], [second]]),
+        ):
+            found = social.discover("linkedin")
+
+        self.assertEqual(len(found), 2)
+        self.assertEqual({item[0] for item in found}, {first["url"], second["url"]})
+
+    def test_cloudflare_worker_request_cap_is_enforced_per_run(self):
+        with (
+            patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
+            patch.object(social, "CLOUDFLARE_CALLS_THIS_RUN", social.MAX_CLOUDFLARE_CALLS_PER_RUN),
+            patch.object(social.session, "post") as mocked_post,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "cloudflare_per_run_cap_reached"):
+                social.cloudflare_profile("facebook", "https://www.facebook.com/example")
+
+        mocked_post.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
