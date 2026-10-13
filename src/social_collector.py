@@ -726,6 +726,38 @@ def profile_field_names(company, web, loc, contact, email, phone, bio, followers
     return [key for key, value in values.items() if val(value)]
 
 
+def extract_public_contacts(text, email="", phone=""):
+    """Extract only visibly published email/phone details from a public profile bio."""
+    source = val(text)
+    email_value = val(email)
+    if not re.search(r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}$", email_value, re.I):
+        match = re.search(r"(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b", source)
+        email_value = match.group(0).rstrip(".,;:") if match else ""
+
+    # Require a nearby label for WhatsApp so IDs, follower counts, and unrelated
+    # numbers are not accidentally treated as consent-ready contact details.
+    wa_match = re.search(
+        r"(?i)(?:whats\\s?app|wa\\.me|whatsapp number|whatsapp contact)\\s*[:：\\-]?\\s*(\\+?\\d[\\d ().\\-]{7,}\\d)",
+        source,
+    )
+    whatsapp = re.sub(r"[\\s().-]", "", wa_match.group(1)) if wa_match else ""
+    if whatsapp.startswith("00"):
+        whatsapp = "+" + whatsapp[2:]
+    if whatsapp and not whatsapp.startswith("+"):
+        whatsapp = "+" + whatsapp
+
+    phone_value = val(phone)
+    if not phone_value:
+        phone_match = re.search(
+            r"(?i)(?:phone|telephone|tel|mobile|contact number)\\s*[:：\\-]?\\s*(\\+?\\d[\\d ().\\-]{7,}\\d)",
+            source,
+        )
+        phone_value = re.sub(r"\\s+", " ", phone_match.group(1)).strip() if phone_match else ""
+    if not phone_value and whatsapp:
+        phone_value = whatsapp
+    return email_value, whatsapp, phone_value
+
+
 def _profile_dicts(value, depth=0):
     """Yield likely profile dictionaries from common API/Worker wrappers."""
     if depth > 6:
@@ -1055,6 +1087,13 @@ def main():
         if (p, surl.rstrip("/")) in seen:
             continue
 
+        email, whatsapp, phone = extract_public_contacts(bio, email, phone)
+        print(
+            f"PUBLIC_CONTACT_EXTRACTION platform={p}; "
+            f"email_found={bool(email)}; whatsapp_found={bool(whatsapp)}; "
+            f"phone_found={bool(phone)}"
+        )
+
         row = {f: "" for f in fields}
         inferred_industry = infer_social_industry(company, web, loc, bio)
         product_labels = {
@@ -1073,6 +1112,7 @@ def main():
             "product_interest": product_labels.get(inferred_industry, inferred_industry),
             "contact_person": contact,
             "email": email,
+            "whatsapp": whatsapp,
             "phone": phone,
             "linkedin": surl if p == "linkedin" else "",
             "source": f"social:{p}",
@@ -1109,6 +1149,11 @@ def main():
         w.writeheader()
         w.writerows(rows)
 
+    if CLOUDFLARE_CALLS_THIS_RUN == 0:
+        print(
+            "CLOUDFLARE_STATUS not_called; Worker supports Facebook profile enrichment only; "
+            "no eligible Facebook profile candidate was available in this run."
+        )
     print(
         f"Social collection: platforms={','.join(platforms_to_collect)}; "
         f"discovered_candidates={len(found)}; added={added}; target_cap={MAX_ITEMS}; "
