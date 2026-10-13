@@ -72,6 +72,61 @@ jobs:
           SOCIAL_MAX_ITEMS: ${{ inputs.social_max_items || '5' }}
         run: python src/social_collector.py
 
+      - name: Check WAHA readiness with bounded retries (never sends messages)
+        if: ${{ !inputs.validation_only }}
+        env:
+          WAHA_URL: ${{ secrets.WAHA_URL }}
+          WAHA_SESSION: ${{ secrets.WAHA_SESSION }}
+          WAHA_API_KEY: ${{ secrets.WAHA_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import quote
+          from urllib.request import Request, urlopen
+
+          base = os.environ.get("WAHA_URL", "").strip().rstrip("/")
+          session = os.environ.get("WAHA_SESSION", "").strip()
+          key = os.environ.get("WAHA_API_KEY", "").strip()
+          ready = False
+          if not base or not session or not key:
+              print("WAHA_PREFLIGHT=CONFIG_MISSING; WhatsApp will be skipped.")
+          else:
+              url = base + "/api/sessions/" + quote(session, safe="")
+              headers = {"X-Api-Key": key, "Accept": "application/json"}
+              for attempt in range(1, 4):
+                  # A probe/retry can detect a recovering service, but Blitz says
+                  # automated requests do not wake free sleeping apps.
+                  try:
+                      req = Request(url, headers=headers, method="GET")
+                      with urlopen(req, timeout=12) as response:
+                          body = response.read(65536).decode("utf-8", errors="replace")
+                          code = response.status
+                  except HTTPError as exc:
+                      code, body = exc.code, ""
+                  except (URLError, TimeoutError, OSError) as exc:
+                      code, body = None, ""
+                      print(f"WAHA_PREFLIGHT_ATTEMPT={attempt}; request_error={type(exc).__name__}")
+                  print(f"WAHA_PREFLIGHT_ATTEMPT={attempt}; session_http_status={code}")
+                  if code == 200:
+                      try:
+                          data = json.loads(body)
+                          state = str(data.get("status", "")).upper() if isinstance(data, dict) else ""
+                      except json.JSONDecodeError:
+                          state = ""
+                      print(f"WAHA_PREFLIGHT_SESSION_STATE={state or 'UNKNOWN'}")
+                      if state == "WORKING":
+                          ready = True
+                          break
+                  if attempt < 3:
+                      time.sleep(10)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              env_file.write("WAHA_READY=" + ("true" if ready else "false") + "\\n")
+          print("WAHA_PREFLIGHT=READY" if ready else "WAHA_PREFLIGHT=UNAVAILABLE; WhatsApp disabled for this run, email may continue.")
+          PY
+
       - name: Generate and send B2B outreach (email and WhatsApp enabled; max three leads per run)
         if: ${{ !inputs.validation_only }}
         env:
@@ -79,7 +134,7 @@ jobs:
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.6-flash' }}
           SEND_EMAILS: "true"
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          WHATSAPP_ENABLED: "true"
+          WHATSAPP_ENABLED: ${{ env.WAHA_READY == 'true' && 'true' || 'false' }}
           WAHA_URL: ${{ secrets.WAHA_URL }}
           WAHA_SESSION: ${{ secrets.WAHA_SESSION }}
           WAHA_API_KEY: ${{ secrets.WAHA_API_KEY }}
