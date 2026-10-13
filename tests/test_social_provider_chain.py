@@ -126,5 +126,32 @@ class ProviderChainTests(unittest.TestCase):
         self.assertEqual(len(errors), 4)
 
 
+    def test_linkedin_search_query_is_not_counted_as_profile_evidence(self):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "success": True,
+                    "posts": [{
+                        "author": {
+                            "url": "https://www.linkedin.com/in/danny-sharma-40b697224",
+                            "name": "Danny Sharma",
+                        },
+                        "description": "A general personal career update unrelated to industrial trade",
+                    }],
+                }
+
+        with patch.object(social.session, "get", return_value=Response()):
+            results = social._linkedin_provider_candidates(
+                "China Jiangsu chemical petrochemical procurement purchasing manager importer"
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertNotIn("China Jiangsu chemical petrochemical procurement purchasing manager importer", results[0]["content"])
+        self.assertEqual(social.social_candidate_score("linkedin", results[0], results[0]["url"]), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
