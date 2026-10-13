@@ -84,7 +84,22 @@ SUBJECT: ...
 
 Email body
 """
-    return llm(prompt)
+    generated = llm(prompt)
+    if generated:
+        return generated
+    # Keep outreach from being blocked by a transient LLM outage. This conservative
+    # template mentions only the company's stated trading categories and asks for relevance.
+    company = (row.get("company_name") or "your team").strip()
+    website = COMPANY.get("website", "")
+    return (
+        f"SUBJECT: Potential sourcing cooperation with {company}\n\n"
+        f"Hello {company} team,\n\n"
+        f"I’m reaching out from {COMPANY['brand']} about possible international sourcing cooperation. "
+        "Our work covers steel, industrial chemicals and petrochemical products. "
+        "If any of these are relevant to your current or upcoming sourcing needs, "
+        "we would be glad to review your specifications and discuss possible options.\n\n"
+        f"Best regards,\n{COMPANY['brand']}\n{website}"
+    )
 
 
 def send_email(to, content, attempts=1):
@@ -139,7 +154,15 @@ Public evidence: {row.get('evidence','')}
 Website: {row.get('website','')}
 Return only the message text.
 """
-    return llm(prompt)
+    generated = llm(prompt)
+    if generated:
+        return generated
+    company = (row.get("company_name") or "your team").strip()
+    return (
+        f"Hello {company} team, this is {COMPANY['brand']} reaching out about possible international sourcing cooperation. "
+        "We work with steel, industrial chemicals and petrochemical products. "
+        "If any of these are relevant to your current or upcoming needs, would you be open to reviewing specifications?"
+    )
 
 
 def _waha_headers():
@@ -285,7 +308,13 @@ def main():
             return f"company:{company}|country:{country}"
         return ""
 
-    done = {key for row in existing if (key := lead_key(row))}
+    # Only successful delivery marks a lead as done. Failed AI/contact/transport
+    # attempts remain eligible for a later retry when fresh public contact data appears.
+    done = {
+        key for row in existing
+        if (row.get("status") == "sent" or row.get("whatsapp_status") == "sent")
+        if (key := lead_key(row))
+    }
     current_run_id = os.getenv("GITHUB_RUN_ID", "")
     # Only contact leads discovered by this run through the two explicitly
     # enabled social platforms. Do not drain historical web-search rows from
@@ -306,11 +335,14 @@ def main():
                 or ("linkedin.com" in social_url and "facebook" not in social_url)
             )
         )
-        if not is_current:
-            skipped_noncurrent += 1
-            continue
         if not is_allowed_social:
             skipped_non_social += 1
+            continue
+        # Revisit only unresolved auto-parts social leads from earlier runs;
+        # never revive old web-search rows or historical unrelated industries.
+        industry = (candidate.get("industry") or "").strip().lower()
+        if not is_current and industry != "automotive parts":
+            skipped_noncurrent += 1
             continue
         key = lead_key(candidate)
         if key and key not in done:
