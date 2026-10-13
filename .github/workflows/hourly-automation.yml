@@ -117,7 +117,10 @@ jobs:
 
       - name: Generate AI outreach and send Gmail
         if: github.event_name != 'workflow_dispatch' || inputs.social_platform == 'auto'
+        timeout-minutes: 6
         env:
+          PYTHONUNBUFFERED: "1"
+          GEMINI_TIMEOUT_MS: "15000"
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: gemini-3.8-flash
           GEMINI_FALLBACK_MODELS: gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite
@@ -128,9 +131,10 @@ jobs:
           WAHA_URL: ${{ secrets.WAHA_URL }}
           WAHA_API_KEY: ${{ secrets.WAHA_API_KEY }}
           WAHA_SESSION: ${{ secrets.WAHA_SESSION }}
-        run: python src/process_leads.py
+        run: python -u src/process_leads.py
 
       - name: Save results
+        if: always()
         run: |
           git config user.name "rozhanglobal-automation"
           git config user.email "actions@users.noreply.github.com"
