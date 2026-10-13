@@ -211,10 +211,10 @@ def _facebook_native_candidates(query):
         out.append({
             "url": url,
             "title": val(item.get("page_name") or item.get("name") or alias),
-            "content": " ".join([
-                val(item.get("category") or item.get("category_name")),
-                query,
-            ]),
+            # Never inject the search query into evidence: it can make an
+            # unrelated page appear to match China/industry filters.
+            "content": val(item.get("description") or item.get("about") or
+                           item.get("category") or item.get("category_name")),
         })
     return out
 
@@ -378,11 +378,15 @@ def social_candidate_score(platform, result, url):
     buyer_hits = sum(1 for term in BUYER_ROLE_TERMS if term in text)
     company_hits = sum(1 for term in COMPANY_TERMS if term in text)
     china_hits = sum(1 for term in CHINA_SIGNALS if term in text)
-    if not industry_hits or not china_hits or not (buyer_hits or company_hits):
+    # Discovery is intentionally broader than final acceptance. Require an
+    # industrial signal, but let profile enrichment verify China and B2B fit;
+    # search snippets often omit a company's headquarters or buyer role.
+    if not industry_hits:
         return 0
-    # Prefer Jiangsu-linked targets, then the clearest B2B purchasing/company signals.
+    # Strongly prioritize China/Jiangsu evidence without requiring it in the
+    # snippet. The final relevant_social_profile check remains strict.
     priority_hits = sum(1 for term in PRIORITY_REGION_SIGNALS if term in text)
-    return industry_hits * 5 + buyer_hits * 4 + company_hits * 2 + china_hits + priority_hits * 3
+    return industry_hits * 5 + buyer_hits * 4 + company_hits * 2 + china_hits * 3 + priority_hits * 4
 
 
 def discover(p):
