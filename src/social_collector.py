@@ -601,30 +601,17 @@ def provider_chain(p, url):
     # A non-empty HTTP response is not necessarily a successful profile fetch.
     # Require a company/profile name plus at least one substantive profile field
     # before accepting a provider; otherwise continue to the next adapter.
-    if p == "linkedin" and "/company/" in urlparse(url).path.lower():
-        # The configured Cloudflare Worker explicitly rejects LinkedIn URLs,
-        # and SocialFetch's configured endpoint is for person profiles. Avoid
-        # spending Worker quota or issuing a known-mismatched profile request.
-        providers = [
-            ("ScrapeCreators", lambda: scrapecreators_profile(p, url)),
-            ("Apify", lambda: apify_profile(p, url)),
-        ]
-    elif p == "linkedin":
-        # This Worker endpoint does not support LinkedIn URLs.
-        providers = [
-            ("ScrapeCreators", lambda: scrapecreators_profile(p, url)),
-            ("Apify", lambda: apify_profile(p, url)),
-            ("SocialFetch", lambda: socialfetch_profile(p, url)),
-        ]
-    else:
-        providers = []
-        if CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
-            providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
-        providers.extend([
-            ("ScrapeCreators", lambda: scrapecreators_profile(p, url)),
-            ("Apify", lambda: apify_profile(p, url)),
-            ("SocialFetch", lambda: socialfetch_profile(p, url)),
-        ])
+    # The Worker now accepts public Facebook and LinkedIn profile/page URLs.
+    # Keep its allowance to one call per workflow run, then use existing
+    # providers as fallbacks without making extra Browser Run calls.
+    providers = []
+    if p in ("facebook", "linkedin") and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+        providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
+    providers.extend([
+        ("ScrapeCreators", lambda: scrapecreators_profile(p, url)),
+        ("Apify", lambda: apify_profile(p, url)),
+        ("SocialFetch", lambda: socialfetch_profile(p, url)),
+    ])
 
     for name, fn in providers:
         try:
@@ -1173,8 +1160,8 @@ def main():
 
     if CLOUDFLARE_CALLS_THIS_RUN == 0:
         print(
-            "CLOUDFLARE_STATUS not_called; Worker supports Facebook profile enrichment only; "
-            "no eligible Facebook profile candidate was available in this run."
+            "CLOUDFLARE_STATUS not_called; no eligible Facebook/LinkedIn profile reached "
+            "the Worker or the per-run Worker allowance was already exhausted."
         )
     print(
         f"Social collection: platforms={','.join(platforms_to_collect)}; "
