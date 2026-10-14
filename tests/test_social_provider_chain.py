@@ -110,7 +110,7 @@ class ProviderChainTests(unittest.TestCase):
             ["gemini-3.6-flash", "gemini-3.6-flash", "gemini-3.8-flash"],
         )
 
-    def test_linkedin_company_uses_company_actor_and_skips_unsupported_worker(self):
+    def test_linkedin_company_uses_worker_then_company_actor_fallback(self):
         company_url = "https://www.linkedin.com/company/jiangsu-example-chemicals"
         company_data = [{
             "name": "Jiangsu Example Chemicals",
@@ -142,7 +142,7 @@ class ProviderChainTests(unittest.TestCase):
             "linkedin_company",
             {"companies": [social.canonical_linkedin_url(company_url)]},
         )
-        cf.assert_not_called()
+        cf.assert_called_once_with("linkedin", company_url)
         sf.assert_not_called()
 
     def test_canonical_linkedin_url_normalizes_regional_hosts(self):
