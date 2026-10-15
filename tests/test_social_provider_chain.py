@@ -9,29 +9,24 @@ import gemini_utils
 
 
 class ProviderChainTests(unittest.TestCase):
-    def test_unusable_cloudflare_response_falls_through_to_valid_provider(self):
+    def test_scrapecreators_is_only_active_profile_provider(self):
         valid_profile = (
-            "Example Chemical Company",
+            "Example Auto Parts Company",
             "https://example.cn",
-            "Shanghai, China",
-            "Example Chemical Company",
+            "Jiangsu, China",
+            "Example Auto Parts Company",
             "",
             "",
-            "Industrial chemical manufacturer in China",
+            "Automotive parts factory and manufacturer in China",
             "120",
             "",
             "https://www.facebook.com/example",
         )
 
-        def normalize(platform, provider, data, fallback):
-            if provider == "CloudflareDeepBackup":
-                return ("", "", "", "", "", "", "", "", "", fallback)
-            return valid_profile
-
         with (
-            patch.object(social, "cloudflare_profile", return_value={"ok": True}) as cf,
-            patch.object(social, "scrapecreators_profile", return_value={"name": "Example Chemical Company"}) as sc,
-            patch.object(social, "normalize_provider", side_effect=normalize),
+            patch.object(social, "cloudflare_profile") as cf,
+            patch.object(social, "scrapecreators_profile", return_value={"name": "Example Auto Parts Company"}) as sc,
+            patch.object(social, "normalize_provider", return_value=valid_profile),
             patch.object(social, "relevant_social_profile", return_value=True),
         ):
             provider, data, errors = social.provider_chain(
@@ -40,10 +35,10 @@ class ProviderChainTests(unittest.TestCase):
 
         self.assertEqual(provider, "ScrapeCreators")
         self.assertTrue(data)
-        self.assertTrue(any("response_without_usable_profile_fields" in e for e in errors))
-        cf.assert_called_once()
+        self.assertEqual(errors, [])
+        cf.assert_not_called()
         sc.assert_called_once()
-
+        self.assertFalse(hasattr(social, "socialfetch_profile"))
 
     def test_auto_falls_back_to_linkedin_when_facebook_has_no_candidates(self):
         linkedin_result = [(
@@ -114,16 +109,15 @@ class ProviderChainTests(unittest.TestCase):
                 social, "scrapecreators_profile",
                 return_value={"name": "Example Chemicals", "location": "India", "followers": 20},
             ),
-            # Explicitly reject the first provider's wrong-region profile so
-            # this test verifies fallback to the company-specific Apify actor.
-            patch.object(social, "relevant_social_profile", side_effect=[False, True]),
+            # Reject the wrong-region profile; no paid fallback is attempted.
+            patch.object(social, "relevant_social_profile", side_effect=[False]),
         ):
             provider, data, errors = social.provider_chain("linkedin", company_url)
 
         self.assertEqual(provider, "")
         self.assertIsNone(data)
         self.assertTrue(any("profile_not_relevant_to_target" in e for e in errors))
-        cf.assert_called_once_with("linkedin", company_url)
+        cf.assert_not_called()
 
     def test_canonical_linkedin_url_normalizes_regional_hosts(self):
         self.assertEqual(
@@ -161,7 +155,7 @@ class ProviderChainTests(unittest.TestCase):
 
         self.assertEqual(provider, "")
         self.assertIsNone(data)
-        self.assertEqual(len(errors), 2)
+        self.assertEqual(len(errors), 1)
 
 
 
