@@ -186,7 +186,7 @@ def send_whatsapp(raw_number, content, attempts=1):
     else:
         if not (raw.startswith("+") or raw.startswith("00")):
             return "skipped_number_not_international"
-        digits = re.sub(r"\\D", "", raw)
+        digits = re.sub(r"\D", "", raw)
         if raw.startswith("00"):
             digits = digits[2:]
         if not (8 <= len(digits) <= 15):
