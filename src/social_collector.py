@@ -576,12 +576,9 @@ def provider_chain(p, url):
     # The Worker now accepts public Facebook and LinkedIn profile/page URLs.
     # Keep its allowance to one call per workflow run, then use existing
     # providers as fallbacks without making extra Browser Run calls.
-    providers = []
-    if p in ("facebook", "linkedin") and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
-        providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
-    # Free-first mode: no paid fallback providers are called.
-    # Cloudflare is temporarily disabled until its Browser Run 422/context-destroyed error is fixed.
-    providers.append(("ScrapeCreators", lambda: scrapecreators_profile(p, url)))
+    # Free-first mode: use ScrapeCreators only. Cloudflare Browser Run previously
+    # returned HTTP 422/context-destroyed, so do not consume its quota until repaired.
+    providers = [("ScrapeCreators", lambda: scrapecreators_profile(p, url))]
 
     for name, fn in providers:
         try:
