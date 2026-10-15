@@ -1,0 +1,4 @@
+
+FROM devlikeapro/waha:latest
+
+EXPOSE 10000
