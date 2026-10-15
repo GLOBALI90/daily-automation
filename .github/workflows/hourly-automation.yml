@@ -79,7 +79,7 @@ jobs:
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.6-flash' }}
           SEND_EMAILS: ${{ inputs.outreach_enabled && 'true' || 'false' }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          WHATSAPP_ENABLED: ${{ (github.event_name == 'schedule' || inputs.outreach_enabled) && 'true' || 'false' }}
+          WHATSAPP_ENABLED: ${{ inputs.outreach_enabled && 'true' || 'false' }}
           WUAPI_API_KEY: ${{ secrets.WUAPI_API_KEY }}
           WUAPI_ACCOUNT_ID: j57bvn1pvvfe2kg6zadtxxh3618gayex
         run: python src/process_leads.py
