@@ -19,6 +19,11 @@ on:
         options:
           - "5"
         default: "5"
+      outreach_enabled:
+        description: "Enable outbound email and WhatsApp delivery. Leave off to collect/review leads without sending."
+        required: false
+        type: boolean
+        default: false
       validation_only:
         description: "Run syntax and unit tests only; skip all external APIs, collection, outreach, and data writes"
         required: false
@@ -71,14 +76,14 @@ jobs:
           SOCIAL_MAX_ITEMS: ${{ inputs.social_max_items || '5' }}
         run: python src/social_collector.py
 
-      - name: Generate and send B2B outreach (email and WhatsApp enabled; max five leads per run)
+      - name: Generate outreach drafts (delivery controlled by outreach_enabled; max five leads per run)
         if: ${{ !inputs.validation_only }}
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.6-flash' }}
-          SEND_EMAILS: "true"
+          SEND_EMAILS: ${{ (github.event_name == 'schedule' || inputs.outreach_enabled) && 'true' || 'false' }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          WHATSAPP_ENABLED: "true"
+          WHATSAPP_ENABLED: ${{ (github.event_name == 'schedule' || inputs.outreach_enabled) && 'true' || 'false' }}
           WUAPI_API_KEY: ${{ secrets.WUAPI_API_KEY }}
           WUAPI_ACCOUNT_ID: j57bvn1pvvfe2kg6zadtxxh3618gayex
         run: python src/process_leads.py
