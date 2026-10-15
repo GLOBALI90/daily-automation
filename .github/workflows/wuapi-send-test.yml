@@ -2,6 +2,11 @@ name: Wuapi One-Message Smoke Test
 
 on:
   workflow_dispatch:
+    inputs:
+      recipient:
+        description: "Test recipient in international format, e.g. +98912..."
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -18,7 +23,7 @@ jobs:
       - name: Send exactly one test message (no inbox reads or webhooks)
         env:
           WUAPI_API_KEY: ${{ secrets.WUAPI_API_KEY }}
-          WUAPI_TEST_RECIPIENT: ${{ secrets.WUAPI_TEST_RECIPIENT }}
+          WUAPI_TEST_RECIPIENT: ${{ inputs.recipient }}
           WUAPI_ACCOUNT_ID: j57bvn1pvvfe2kg6zadtxxh3618gayex
           IDEMPOTENCY_KEY: wuapi-smoke-${{ github.run_id }}
         run: |
@@ -34,11 +39,11 @@ jobs:
           account_id = os.environ["WUAPI_ACCOUNT_ID"]
           idempotency_key = os.environ["IDEMPOTENCY_KEY"]
 
-          if not api_key or not recipient:
-              print("CONFIG_MISSING: add WUAPI_API_KEY and WUAPI_TEST_RECIPIENT in GitHub Actions secrets.")
+          if not api_key:
+              print("CONFIG_MISSING: add WUAPI_API_KEY in GitHub Actions secrets.")
               raise SystemExit(1)
           if not re.fullmatch(r"\+[1-9]\d{7,14}", recipient):
-              print("CONFIG_INVALID: WUAPI_TEST_RECIPIENT must be an E.164 phone number, stored as a secret.")
+              print("CONFIG_INVALID: enter the test recipient in international E.164 format.")
               raise SystemExit(1)
 
           payload = json.dumps({
