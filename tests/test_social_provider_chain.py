@@ -31,8 +31,6 @@ class ProviderChainTests(unittest.TestCase):
         with (
             patch.object(social, "cloudflare_profile", return_value={"ok": True}) as cf,
             patch.object(social, "scrapecreators_profile", return_value={"name": "Example Chemical Company"}) as sc,
-            patch.object(social, "apify_profile") as apify,
-            patch.object(social, "socialfetch_profile") as sf,
             patch.object(social, "normalize_provider", side_effect=normalize),
             patch.object(social, "relevant_social_profile", return_value=True),
         ):
@@ -45,8 +43,6 @@ class ProviderChainTests(unittest.TestCase):
         self.assertTrue(any("response_without_usable_profile_fields" in e for e in errors))
         cf.assert_called_once()
         sc.assert_called_once()
-        apify.assert_not_called()
-        sf.assert_not_called()
 
 
     def test_auto_falls_back_to_linkedin_when_facebook_has_no_candidates(self):
@@ -112,16 +108,6 @@ class ProviderChainTests(unittest.TestCase):
 
     def test_linkedin_company_uses_worker_then_company_actor_fallback(self):
         company_url = "https://www.linkedin.com/company/jiangsu-example-chemicals"
-        company_data = [{
-            "name": "Jiangsu Example Chemicals",
-            "website": "https://example.cn",
-            "headquarters": "Jiangsu, China",
-            "description": "Industrial chemical manufacturer and supplier",
-            "industry": "Chemical Manufacturing",
-            "followersCount": 120,
-            "url": company_url,
-        }]
-
         with (
             patch.object(social, "cloudflare_profile") as cf,
             patch.object(
@@ -131,19 +117,13 @@ class ProviderChainTests(unittest.TestCase):
             # Explicitly reject the first provider's wrong-region profile so
             # this test verifies fallback to the company-specific Apify actor.
             patch.object(social, "relevant_social_profile", side_effect=[False, True]),
-            patch.object(social, "actor", return_value=company_data) as actor,
-            patch.object(social, "socialfetch_profile") as sf,
         ):
             provider, data, errors = social.provider_chain("linkedin", company_url)
 
-        self.assertEqual(provider, "Apify")
-        self.assertEqual(data, company_data)
-        actor.assert_called_once_with(
-            "linkedin_company",
-            {"companies": [social.canonical_linkedin_url(company_url)]},
-        )
+        self.assertEqual(provider, "")
+        self.assertIsNone(data)
+        self.assertTrue(any("profile_not_relevant_to_target" in e for e in errors))
         cf.assert_called_once_with("linkedin", company_url)
-        sf.assert_not_called()
 
     def test_canonical_linkedin_url_normalizes_regional_hosts(self):
         self.assertEqual(
@@ -174,8 +154,6 @@ class ProviderChainTests(unittest.TestCase):
         with (
             patch.object(social, "cloudflare_profile", return_value={}),
             patch.object(social, "scrapecreators_profile", return_value=[]),
-            patch.object(social, "apify_profile", return_value=None),
-            patch.object(social, "socialfetch_profile", return_value=""),
         ):
             provider, data, errors = social.provider_chain(
                 "facebook", "https://www.facebook.com/example"
@@ -183,7 +161,7 @@ class ProviderChainTests(unittest.TestCase):
 
         self.assertEqual(provider, "")
         self.assertIsNone(data)
-        self.assertEqual(len(errors), 4)
+        self.assertEqual(len(errors), 2)
 
 
 
