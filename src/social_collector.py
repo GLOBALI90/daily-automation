@@ -18,7 +18,6 @@ PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").strip().lower().lstrip(chr(92) +
 
 APIFY = os.getenv("APIFY_API_TOKEN", "").strip()
 SCRAPECREATORS = os.getenv("SCRAPECREATORS_API_KEY", "").strip()
-SOCIALFETCH = os.getenv("SOCIALFETCH_API_KEY", "").strip()
 
 CLOUDFLARE_URL = os.getenv(
     "SOCIAL_DEEP_BACKUP_URL",
@@ -499,33 +498,6 @@ def scrapecreators_profile(p, url):
     )
 
 
-def socialfetch_profile(p, url):
-    if not SOCIALFETCH:
-        raise RuntimeError("SOCIALFETCH_API_KEY missing")
-
-    headers = {"x-api-key": SOCIALFETCH}
-    handle = handle_from_url(url)
-
-    if p == "linkedin":
-        return get_json(
-            "https://api.socialfetch.dev/v2/linkedin/profiles",
-            headers=headers,
-            params={"handle": handle}
-        )
-
-    if p == "facebook":
-        return get_json(
-            "https://api.socialfetch.dev/v1/facebook/profiles",
-            headers=headers,
-            params={"url": url}
-        )
-
-    return get_json(
-        f"https://api.socialfetch.dev/v1/twitter/profiles/{quote(handle, safe='')}",
-        headers=headers
-    )
-
-
 def actor(p, payload):
     if not APIFY:
         raise RuntimeError("APIFY_API_TOKEN missing")
@@ -607,11 +579,9 @@ def provider_chain(p, url):
     providers = []
     if p in ("facebook", "linkedin") and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
         providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
-    providers.extend([
-        ("ScrapeCreators", lambda: scrapecreators_profile(p, url)),
-        ("Apify", lambda: apify_profile(p, url)),
-        ("SocialFetch", lambda: socialfetch_profile(p, url)),
-    ])
+    # Free-first mode: no paid fallback providers are called.
+    # Cloudflare is temporarily disabled until its Browser Run 422/context-destroyed error is fixed.
+    providers.append(("ScrapeCreators", lambda: scrapecreators_profile(p, url)))
 
     for name, fn in providers:
         try:
@@ -875,18 +845,6 @@ def normalize_provider(p, provider, data, fallback):
             val(x.get("verified") or x.get("is_blue_verified")), fallback
         )
 
-    if provider == "SocialFetch":
-        xdata = x.get("data") if isinstance(x.get("data"), dict) else x
-        return (
-            val(xdata.get("displayName") or xdata.get("name") or xdata.get("handle")),
-            val(xdata.get("website") or xdata.get("externalUrl")),
-            val(xdata.get("location")),
-            val(xdata.get("displayName") or xdata.get("name") or xdata.get("handle")),
-            val(xdata.get("email")), val(xdata.get("phone")),
-            val(xdata.get("headline") or xdata.get("about") or xdata.get("bio") or xdata.get("description")),
-            val(xdata.get("followers")),
-            val(xdata.get("verified")), fallback
-        )
 
     if p == "linkedin" and "/company/" in urlparse(fallback).path.lower():
         location = (
@@ -1022,10 +980,7 @@ def main():
     added = 0
     provider_counts = {
         "ScrapeCreators": 0,
-        "Apify": 0,
-        "SocialFetch": 0,
         "CloudflareDeepBackup": 0,
-        "PublicSearchIndex": 0,
         "failed": 0
     }
 
@@ -1044,7 +999,7 @@ def main():
                 "search_query": query,
                 "discovery_method": discovery_method,
                 "search_provider": indexed.get("search_provider", ""),
-                "note": "Public social data only; profile enrichment uses Cloudflare and configured social providers."
+                "note": "Public social data only; profile enrichment uses the free-first ScrapeCreators provider."
             }, ensure_ascii=False)
         )
 
@@ -1158,11 +1113,10 @@ def main():
         w.writeheader()
         w.writerows(rows)
 
-    if CLOUDFLARE_CALLS_THIS_RUN == 0:
-        print(
-            "CLOUDFLARE_STATUS not_called; no eligible Facebook/LinkedIn profile reached "
-            "the Worker or the per-run Worker allowance was already exhausted."
-        )
+    print(
+        "CLOUDFLARE_STATUS disabled_pending_worker_fix; Browser Run previously returned "
+        "HTTP 422/context-destroyed; no Worker quota consumed."
+    )
     print(
         f"Social collection: platforms={','.join(platforms_to_collect)}; "
         f"discovered_candidates={len(found)}; added={added}; target_cap={MAX_ITEMS}; "
