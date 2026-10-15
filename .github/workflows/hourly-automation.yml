@@ -132,11 +132,11 @@ jobs:
                           time.sleep(10)
 
                   with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
-                      env_file.write("WAHA_READY=" + ("true" if ready else "false") + "\\n")
+                      env_file.write("WAHA_READY=" + ("true" if ready else "false") + "\n")
                   print("WAHA_PREFLIGHT=READY" if ready else "WAHA_PREFLIGHT=UNAVAILABLE; WhatsApp sending is blocked for this run.")
           if not ready:
               with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
-                  env_file.write("WAHA_READY=false\\n")
+                  env_file.write("WAHA_READY=false\n")
           PY
 
       - name: Generate and send B2B outreach (email and WhatsApp enabled; max three leads per run)
