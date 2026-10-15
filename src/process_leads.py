@@ -15,7 +15,7 @@ COMPANY = json.loads((ROOT / "config/company.json").read_text(encoding="utf-8"))
 LEADS = ROOT / "data/leads.csv"
 OUTREACH = ROOT / "data/outreach.csv"
 
-OUTREACH_LIMIT_PER_RUN = 3
+OUTREACH_LIMIT_PER_RUN = 5
 AUTH_USERNAME = "saberi.export.import@gmail.com"
 FROM_ADDRESS = "saberi.export.import@gmail.com"
 
@@ -165,126 +165,74 @@ Return only the message text.
     )
 
 
-def _waha_headers():
-    key = os.getenv("WAHA_API_KEY", "").strip()
-    headers = {"Content-Type": "application/json"}
-    if key:
-        headers["X-Api-Key"] = key
-    return headers
-
-
 def send_whatsapp(raw_number, content, attempts=1):
+    """Send outbound text through Wuapi only; never fetch chats or inbound messages."""
     if os.getenv("WHATSAPP_ENABLED", "false").lower() != "true":
         return "draft_only"
-    if os.getenv("WAHA_READY", "").strip().lower() == "false":
-        print("WhatsApp skipped: WAHA preflight did not confirm a WORKING session.")
-        return "waha_preflight_unavailable"
-    base = os.getenv("WAHA_URL", "").strip().rstrip("/")
-    session_name = os.getenv("WAHA_SESSION", "default").strip()
-    api_key = os.getenv("WAHA_API_KEY", "").strip()
-    if not base or not api_key or not session_name:
-        return "missing_waha_config"
-    # Do not guess country codes. Use a publicly listed number in international format.
+
+    api_key = os.getenv("WUAPI_API_KEY", "").strip()
+    account_id = os.getenv("WUAPI_ACCOUNT_ID", "").strip()
+    if not api_key or not account_id:
+        print("WhatsApp skipped: WUAPI_API_KEY or WUAPI_ACCOUNT_ID is missing.")
+        return "missing_wuapi_config"
+
     raw = (raw_number or "").strip()
-    if not (raw.startswith("+") or raw.startswith("00")):
-        return "skipped_number_not_international"
-    digits = re.sub(r"\D", "", raw)
-    if raw.startswith("00"):
-        digits = digits[2:]
-    if not (8 <= len(digits) <= 15) or not content.strip():
-        return "skipped_invalid_number_or_message"
+    if not content or not content.strip():
+        return "skipped_empty_message"
 
-    headers = _waha_headers()
-    last_error = ""
-    for attempt in range(1, attempts + 1):
+    # Wuapi accepts E.164 contact numbers and WhatsApp group IDs.
+    if raw.endswith("@g.us"):
+        recipient = raw
+    else:
+        if not (raw.startswith("+") or raw.startswith("00")):
+            return "skipped_number_not_international"
+        digits = re.sub(r"\\D", "", raw)
+        if raw.startswith("00"):
+            digits = digits[2:]
+        if not (8 <= len(digits) <= 15):
+            return "skipped_invalid_number"
+        recipient = "+" + digits
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    run_id = os.getenv("GITHUB_RUN_ID", "manual")
+    # Stable within a workflow run: a retry cannot enqueue the same message twice.
+    idempotency_key = f"rozhan-{run_id}-{re.sub(r'[^A-Za-z0-9@.+_-]', '', recipient)}"
+    try:
+        response = requests.post(
+            "https://api.wuapi.dev/v1/messages",
+            headers={**headers, "Idempotency-Key": idempotency_key[:200]},
+            json={
+                "accountId": account_id,
+                "to": recipient,
+                "text": content.strip(),
+            },
+            timeout=25,
+        )
+        if response.status_code >= 400:
+            try:
+                error_data = response.json()
+                error_code = str(error_data.get("code", "api_error")) if isinstance(error_data, dict) else "api_error"
+            except ValueError:
+                error_code = "api_error"
+            print(f"WUAPI send failed: HTTP {response.status_code}; code={error_code}")
+            return f"wuapi_http_{response.status_code}:{error_code}"
+
         try:
-            # Wake a sleeping host, then inspect session readiness.
-            wake = requests.get(base, headers=headers, timeout=10)
-            print(f"WAHA wake request: HTTP {wake.status_code}")
-            session_url = f"{base}/api/sessions/{quote_component(session_name)}"
-            status_resp = requests.get(session_url, headers=headers, timeout=10)
-            if status_resp.status_code == 404:
-                start_resp = requests.post(
-                    f"{base}/api/sessions/start",
-                    headers=headers,
-                    json={"name": session_name},
-                    timeout=10,
-                )
-                if start_resp.status_code >= 400 and start_resp.status_code != 422:
-                    start_resp.raise_for_status()
-            elif status_resp.status_code >= 400:
-                status_resp.raise_for_status()
-
-            # Allow a cold WAHA instance a short bounded readiness window.
-            ready = False
-            for _ in range(4):
-                check = requests.get(session_url, headers=headers, timeout=8)
-                if check.ok:
-                    try:
-                        state = str(check.json().get("status", "")).upper()
-                    except (ValueError, AttributeError):
-                        state = ""
-                    if state in {"WORKING", "SCAN_QR_CODE"}:
-                        ready = state == "WORKING"
-                        if ready:
-                            break
-                    elif state == "STARTING":
-                        time.sleep(3)
-                        continue
-                time.sleep(3)
-            if not ready:
-                return "waha_session_not_ready"
-
-            # Current WAHA API exposes contact existence as a GET endpoint.
-            # Keep a read-only legacy fallback for older WAHA deployments.
-            check_number = requests.get(
-                f"{base}/api/contacts/check-exists",
-                headers=headers,
-                params={"phone": digits, "session": session_name},
-                timeout=10,
-            )
-            if check_number.status_code == 404:
-                check_number = requests.get(
-                    f"{base}/api/checkNumberStatus",
-                    headers=headers,
-                    params={"phone": digits, "session": session_name},
-                    timeout=10,
-                )
-            check_number.raise_for_status()
-            number_data = check_number.json()
-            if isinstance(number_data, dict) and (
-                number_data.get("numberExists") is False
-                or number_data.get("exists") is False
-            ):
-                return "number_not_on_whatsapp"
-            chat_id = ""
-            if isinstance(number_data, dict):
-                chat_id = str(
-                    number_data.get("chatId")
-                    or number_data.get("jid")
-                    or (number_data.get("id") if isinstance(number_data.get("id"), str) else "")
-                    or ""
-                ).strip()
-                nested = number_data.get("result")
-                if not chat_id and isinstance(nested, dict):
-                    chat_id = str(nested.get("chatId") or nested.get("jid") or "").strip()
-            if not chat_id:
-                return "number_status_no_chat_id"
-
-            sent = requests.post(
-                f"{base}/api/sendText",
-                headers=headers,
-                json={"chatId": chat_id, "text": content.strip(), "session": session_name},
-                timeout=20,
-            )
-            sent.raise_for_status()
-            return "sent"
-        except (requests.RequestException, ValueError, TypeError) as exc:
-            last_error = f"{type(exc).__name__}: {str(exc)[:240]}"
-            print(f"WhatsApp send failed (attempt {attempt}/{attempts}): {last_error}")
-            if attempt < attempts:
-                time.sleep(5)
-    return f"send_failed: {last_error}" if last_error else "send_failed"
+            data = response.json()
+        except ValueError:
+            data = {}
+        status = str(data.get("status", "queued")).lower() if isinstance(data, dict) else "queued"
+        message_id = str(data.get("id", "")) if isinstance(data, dict) else ""
+        print(f"WUAPI_SEND_ACCEPTED recipient={recipient}; status={status}; message_id={message_id or 'not_returned'}")
+        # Wuapi normally returns 202/queued. Track it as queued to prevent duplicate outreach.
+        return "queued" if status == "queued" else ("sent" if status == "sent" else f"accepted:{status}")
+    except requests.RequestException as exc:
+        print(f"WUAPI send request failed: {type(exc).__name__}: {str(exc)[:180]}")
+        return f"wuapi_request_failed:{type(exc).__name__}"
 
 
 def quote_component(value):
@@ -324,7 +272,7 @@ def main():
     # attempts remain eligible for a later retry when fresh public contact data appears.
     done = {
         key for row in existing
-        if (row.get("status") == "sent" or row.get("whatsapp_status") == "sent")
+        if (row.get("status") == "sent" or row.get("whatsapp_status") in {"sent", "queued"})
         if (key := lead_key(row))
     }
     current_run_id = os.getenv("GITHUB_RUN_ID", "")
