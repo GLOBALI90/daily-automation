@@ -682,14 +682,17 @@ def cloudflare_profile(p, url):
     return data
 
 
-def provider_chain(p, url):
+def pace_profile_enrichment(platform):
     global LAST_PROFILE_REQUEST_AT
     if LAST_PROFILE_REQUEST_AT:
         wait = REQUEST_INTERVAL_SECONDS - (time.monotonic() - LAST_PROFILE_REQUEST_AT)
         if wait > 0:
-            print(f"SOCIAL_REQUEST_PACING sleep_seconds={wait:.1f}; platform={p}")
+            print(f"SOCIAL_REQUEST_PACING sleep_seconds={wait:.1f}; platform={platform}")
             time.sleep(wait)
     LAST_PROFILE_REQUEST_AT = time.monotonic()
+
+
+def provider_chain(p, url):
     errors = []
 
     # A non-empty HTTP response is not necessarily a successful profile fetch.
@@ -1168,6 +1171,7 @@ def main():
             }, ensure_ascii=False)
         )
 
+        pace_profile_enrichment(p)
         provider, data, errors = provider_chain(p, url)
         if not provider:
             PROFILE_AUDIT.append({
