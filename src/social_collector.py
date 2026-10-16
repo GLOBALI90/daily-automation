@@ -385,7 +385,7 @@ def social_candidate_score(platform, result, url):
     title = val(result.get("title"))
     snippet = val(result.get("content") or result.get("snippet") or result.get("description"))
     text = " ".join([title, snippet, url]).lower()
-lubricant_hits = sum(1 for term in INDUSTRY_TERMS if term in text)
+    lubricant_hits = sum(1 for term in INDUSTRY_TERMS if term in text)
     producer_hits = sum(1 for term in (
         "factory", "manufacturer", "manufacturing", "producer", "production",
         "blending plant", "工厂", "生产厂家", "制造厂", "制造商", "生产企业", "调和厂"
