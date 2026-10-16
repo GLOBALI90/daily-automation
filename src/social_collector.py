@@ -105,8 +105,8 @@ def good(p, u):
         for x in ["/search", "/explore", "/hashtag", "/jobs"]
     )
 
-# Strict target: Chinese B2B industrial companies and relevant purchasing professionals only.
-# No broad consumer, lifestyle, entertainment, unrelated tech, or generic lead collection.
+# Strict pilot target: manufacturers and producers of industrial lubricants in China.
+# No automotive parts, generic chemicals, consumer products, or unrelated lead collection.
 INDUSTRY_TERMS = (
     "industrial lubricant", "industrial lubricants", "lubricant manufacturer",
     "lubricants manufacturer", "lubricating oil", "lubricating oils",
@@ -1057,7 +1057,7 @@ def main():
             "website": web,
             "country": "China",
             "industry": inferred_industry,
-            "buyer_type": "industrial buyer / manufacturer / importer",
+            "buyer_type": "industrial-lubricant manufacturer / producer",
             "product_interest": product_labels.get(inferred_industry, inferred_industry),
             "contact_person": contact,
             "email": email,
