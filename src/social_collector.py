@@ -1232,9 +1232,27 @@ def main():
         "failed": 0
     }
 
+    personal_profiles_added = 0
     for p, url, query, discovery_method in found:
-        if added >= MAX_ITEMS:
+        is_personal_linkedin = p == "linkedin" and urlparse(url).path.lower().startswith("/in/")
+        if added >= MAX_ITEMS and not is_personal_linkedin:
             break
+        if is_personal_linkedin:
+            indexed = LINKEDIN_SEARCH_RESULTS.get(url.rstrip("/"), {})
+            saved = save_personal_profile(p, url, indexed.get("title", ""))
+            PROFILE_AUDIT.append({
+                "platform": p,
+                "profile_url": url,
+                "outcome": "personal_account_saved" if saved else "personal_account_already_saved",
+                "stored_fields": PERSONAL_PROFILE_FIELDS
+            })
+            if saved:
+                personal_profiles_added += 1
+            print(
+                f"PERSONAL_PROFILE_ACCOUNT_ONLY platform=linkedin; saved={saved}; "
+                f"profile_url={url}; contact_details_saved=false"
+            )
+            continue
         if (p, url.rstrip("/")) in seen:
             print(f"Skipping previously stored social profile: platform={p}; url={url}")
             continue
@@ -1385,6 +1403,15 @@ def main():
         f"providers={json.dumps(provider_counts, ensure_ascii=False)}"
     )
     write_run_report(platforms_to_collect, len(found), added, provider_counts, "completed")
+    personal_discovered = sum(
+        1 for p, u, _, _ in found
+        if p == "linkedin" and urlparse(u).path.lower().startswith("/in/")
+    )
+    print(
+        f"PERSONAL_PROFILE_SUMMARY discovered={personal_discovered}; "
+        f"new_account_only_records={personal_profiles_added}; "
+        f"file={PERSONAL_PROFILES.relative_to(ROOT)}; contact_details_saved=false"
+    )
 
 
 if __name__ == "__main__":
