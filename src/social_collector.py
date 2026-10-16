@@ -9,11 +9,11 @@ DATA = ROOT / "data"
 LEADS = DATA / "leads.csv"
 DATA.mkdir(exist_ok=True)
 
-# Up to five accepted leads per run. The Cloudflare Worker itself remains
-# capped at one request per run to preserve its four-actions/day allowance.
+# Pilot scope: Chinese industrial-lubricant manufacturers only.
+# Keep Worker enrichment to two calls per run, below its four-actions/day allowance.
 MAX_ITEMS = min(5, max(1, int(os.getenv("SOCIAL_MAX_ITEMS", "5") or "5")))
 CLOUDFLARE_CALLS_THIS_RUN = 0
-MAX_CLOUDFLARE_CALLS_PER_RUN = 1
+MAX_CLOUDFLARE_CALLS_PER_RUN = 2
 PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").strip().lower().lstrip(chr(92) + "/")
 
 APIFY = os.getenv("APIFY_API_TOKEN", "").strip()
@@ -108,14 +108,13 @@ def good(p, u):
 # Strict target: Chinese B2B industrial companies and relevant purchasing professionals only.
 # No broad consumer, lifestyle, entertainment, unrelated tech, or generic lead collection.
 INDUSTRY_TERMS = (
-    "automotive parts", "auto parts", "automobile parts", "car parts",
-    "automotive components", "automobile components", "vehicle components",
-    "auto component", "car component", "automotive supplier",
-    "automotive manufacturing", "auto parts manufacturer", "car parts factory",
-    "engine parts", "brake parts", "transmission parts", "suspension parts",
-    "steering parts", "body parts", "stamping parts", "forged parts",
-    "casting parts", "machined parts", "plastic auto parts", "rubber auto parts",
-    "汽车零部件", "汽车配件", "汽车零配件", "汽车制造", "汽车零件"
+    "industrial lubricant", "industrial lubricants", "lubricant manufacturer",
+    "lubricants manufacturer", "lubricating oil", "lubricating oils",
+    "lubricating grease", "industrial grease", "grease manufacturer",
+    "metalworking fluid", "hydraulic oil", "gear oil", "compressor oil",
+    "turbine oil", "industrial oil manufacturer", "lubricant blending",
+    "润滑油", "工业润滑油", "润滑脂", "工业润滑脂", "润滑剂",
+    "润滑油厂家", "润滑油生产", "润滑油制造商", "润滑脂生产厂家"
 )
 COMPANY_TERMS = (
     "company", "group", "limited", "ltd", "manufacturer", "manufacturing",
@@ -142,46 +141,37 @@ PRIORITY_REGION_SIGNALS = ("jiangsu", "suzhou", "nanjing", "wuxi", "changzhou", 
 def infer_social_industry(company, website, location, bio):
     text = " ".join([company, website, location, bio]).lower()
     if any(term in text for term in INDUSTRY_TERMS):
-        return "automotive parts"
-    if "petrochemical" in text or "polymer" in text or "feedstock" in text:
-        return "petrochemicals"
-    if "petroleum" in text or "oil and gas" in text or "oil & gas" in text or "refinery" in text:
-        return "petroleum products"
-    if "steel" in text or "metal" in text:
-        return "steel"
-    if "chemical" in text or "solvent" in text or "fertilizer" in text or "resin" in text:
-        return "chemicals"
+        return "industrial lubricants"
     return ""
 
 
 def relevant_social_profile(platform, url, company, website, location, bio):
-    """Keep the search focused only on auto-parts factories/manufacturers in China."""
+    """Accept only China-based industrial-lubricant manufacturers and producers."""
     text = " ".join([url, company, website, location, bio]).lower()
     if not company or company.lower() in {"unknown", "none", "n/a", "facebook", "linkedin"}:
         return False
     china_match = any(signal in text for signal in CHINA_SIGNALS) or domain(url).endswith(".cn")
     if not china_match:
         return False
-    auto_parts_match = any(term in text for term in INDUSTRY_TERMS)
-    factory_match = any(term in text for term in (
-        "factory", "manufacturer", "manufacturing", "manufacturer of",
-        "production", "plant", "工厂", "生产厂家", "制造厂", "制造商"
+    lubricant_match = any(term in text for term in INDUSTRY_TERMS)
+    producer_match = any(term in text for term in (
+        "factory", "manufacturer", "manufacturing", "producer", "production",
+        "blending plant", "lubricant plant", "industrial plant",
+        "工厂", "生产厂家", "制造厂", "制造商", "生产企业", "调和厂"
     ))
-    # Do not require buyer roles, export/import keywords, priority provinces,
-    # or unrelated industrial categories. Only the requested target remains.
-    return auto_parts_match and factory_match
+    return lubricant_match and producer_match
 
 
 NATIVE_QUERIES = {
     "linkedin": [
-        'China automotive parts manufacturer factory "auto parts"',
-        'Chinese automobile components factory automotive supplier',
-        'China engine brake transmission suspension parts manufacturer',
+        'China industrial lubricant manufacturer factory lubricating oil producer',
+        'Chinese industrial lubricants blending plant hydraulic oil gear oil manufacturer',
+        '中国 工业润滑油 润滑脂 生产厂家 制造商',
     ],
     "facebook": [
-        'China auto parts factory manufacturer automotive components',
-        'Chinese car parts production factory OEM automotive supplier',
-        '汽车零部件 中国 工厂 生产厂家',
+        'China industrial lubricant factory manufacturer lubricating oil producer',
+        'Chinese industrial grease hydraulic oil lubricant blending plant',
+        '中国 工业润滑油 润滑脂 生产厂家',
     ],
 }
 
@@ -395,17 +385,16 @@ def social_candidate_score(platform, result, url):
     title = val(result.get("title"))
     snippet = val(result.get("content") or result.get("snippet") or result.get("description"))
     text = " ".join([title, snippet, url]).lower()
-    auto_parts_hits = sum(1 for term in INDUSTRY_TERMS if term in text)
-    factory_hits = sum(1 for term in (
-        "factory", "manufacturer", "manufacturing", "production", "plant",
-        "工厂", "生产厂家", "制造厂", "制造商"
+lubricant_hits = sum(1 for term in INDUSTRY_TERMS if term in text)
+    producer_hits = sum(1 for term in (
+        "factory", "manufacturer", "manufacturing", "producer", "production",
+        "blending plant", "工厂", "生产厂家", "制造厂", "制造商", "生产企业", "调和厂"
     ) if term in text)
     china_hits = sum(1 for term in CHINA_SIGNALS if term in text)
-    # Search only the requested auto-parts factory segment. Do not gate on
-    # purchasing roles, export/import terms, or a preferred Chinese province.
-    if not auto_parts_hits:
+    # Search only Chinese industrial-lubricant manufacturers for this pilot.
+    if not lubricant_hits:
         return 0
-    return auto_parts_hits * 5 + factory_hits * 3 + china_hits * 2
+    return lubricant_hits * 5 + producer_hits * 3 + china_hits * 2
 
 
 def discover(p):
@@ -573,12 +562,11 @@ def provider_chain(p, url):
     # A non-empty HTTP response is not necessarily a successful profile fetch.
     # Require a company/profile name plus at least one substantive profile field
     # before accepting a provider; otherwise continue to the next adapter.
-    # The Worker now accepts public Facebook and LinkedIn profile/page URLs.
-    # Keep its allowance to one call per workflow run, then use existing
-    # providers as fallbacks without making extra Browser Run calls.
-    # Free-first mode: use ScrapeCreators only. Cloudflare Browser Run previously
-    # returned HTTP 422/context-destroyed, so do not consume its quota until repaired.
+    # ScrapeCreators is primary. Cloudflare Worker is the bounded fallback for
+    # either public LinkedIn or Facebook profiles/pages when its secret is configured.
     providers = [("ScrapeCreators", lambda: scrapecreators_profile(p, url))]
+    if CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+        providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
 
     for name, fn in providers:
         try:
@@ -1111,8 +1099,9 @@ def main():
         w.writerows(rows)
 
     print(
-        "CLOUDFLARE_STATUS disabled_pending_worker_fix; Browser Run previously returned "
-        "HTTP 422/context-destroyed; no Worker quota consumed."
+        f"CLOUDFLARE_STATUS token_configured={bool(CLOUDFLARE_TOKEN)}; "
+        f"calls={CLOUDFLARE_CALLS_THIS_RUN}/{MAX_CLOUDFLARE_CALLS_PER_RUN}; "
+        "supported_platforms=linkedin,facebook"
     )
     print(
         f"Social collection: platforms={','.join(platforms_to_collect)}; "
