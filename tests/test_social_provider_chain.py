@@ -330,7 +330,7 @@ class ProviderChainTests(unittest.TestCase):
                     "success": True,
                     "posts": [{
                         "author": {
-                            "url": "https://www.linkedin.com/in/danny-sharma-40b697224",
+                            "url": "https://www.linkedin.com/company/example-industrial-lubricants",
                             "name": "Danny Sharma",
                         },
                         "description": "A general personal career update unrelated to industrial trade",
