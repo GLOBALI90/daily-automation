@@ -1145,6 +1145,9 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
             "requests": CLOUDFLARE_AUDIT
         },
         "profile_fetch_results": PROFILE_AUDIT,
+        "personal_profiles_saved_this_run": sum(
+            1 for item in PROFILE_AUDIT if item.get("outcome") == "personal_account_saved"
+        ),
         "notes": [
             "Public LinkedIn company pages and public Facebook pages only.",
             "HTTP success does not guarantee usable public profile fields.",
