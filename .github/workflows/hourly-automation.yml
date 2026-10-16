@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       social_platform:
-        description: "Try Facebook first, then LinkedIn if Facebook returns no candidates"
+        description: "Collect public pages from the selected networks; save relevant LinkedIn people as account-only records"
         required: false
         type: choice
         options:
@@ -13,7 +13,7 @@ on:
           - linkedin
         default: auto
       social_max_items:
-        description: "Conservative pilot: collect up to three qualified public-company leads per run"
+        description: "Up to three qualified company leads plus relevant public LinkedIn personal account IDs"
         required: false
         type: choice
         options:
@@ -65,7 +65,7 @@ jobs:
       - name: Test social provider fallback and response quality
         run: python -m unittest discover -s tests -v
 
-      - name: Collect public social leads from Facebook and LinkedIn (up to five valid leads per run)
+      - name: Collect public social leads and account-only LinkedIn profiles
         if: ${{ !inputs.validation_only }}
         env:
           SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
