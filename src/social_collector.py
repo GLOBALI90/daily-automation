@@ -391,8 +391,9 @@ def social_candidate_score(platform, result, url):
         "blending plant", "工厂", "生产厂家", "制造厂", "制造商", "生产企业", "调和厂"
     ) if term in text)
     china_hits = sum(1 for term in CHINA_SIGNALS if term in text)
-    # Search only Chinese industrial-lubricant manufacturers for this pilot.
-    if not lubricant_hits:
+    # Strict pilot gate: require evidence of all three dimensions in the
+    # candidate itself; a search query alone is never evidence.
+    if not lubricant_hits or not producer_hits or not china_hits:
         return 0
     return lubricant_hits * 5 + producer_hits * 3 + china_hits * 2
 
@@ -486,7 +487,7 @@ def discover(p):
     # route. Use it only when native discovery yields no relevant candidates.
     # Candidate URLs from this fallback are not trusted as leads until profile
     # enrichment and the strict China/manufacturer relevance check both pass.
-    if not ranked and CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+    if len(ranked) < MAX_ITEMS and CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
         fallback_query = NATIVE_QUERIES[p][0]
         try:
             fallback_results = cloudflare_search_candidates(p, fallback_query)
