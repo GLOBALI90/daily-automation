@@ -14,6 +14,8 @@ DATA.mkdir(exist_ok=True)
 MAX_ITEMS = min(5, max(1, int(os.getenv("SOCIAL_MAX_ITEMS", "3") or "3")))
 REQUEST_INTERVAL_SECONDS = max(11.0, float(os.getenv("SOCIAL_REQUEST_INTERVAL_SECONDS", "15") or "15"))
 LAST_PROFILE_REQUEST_AT = 0.0
+LAST_CLOUDFLARE_REQUEST_AT = 0.0
+CLOUDFLARE_SEARCH_USED_THIS_RUN = False
 CLOUDFLARE_CALLS_THIS_RUN = 0
 MAX_CLOUDFLARE_CALLS_PER_RUN = 2
 CLOUDFLARE_AUDIT = []
@@ -418,8 +420,21 @@ def social_candidate_score(platform, result, url):
     return lubricant_hits * 5 + producer_hits * 3 + china_hits * 2
 
 
+def pace_cloudflare_request():
+    global LAST_CLOUDFLARE_REQUEST_AT
+    if LAST_CLOUDFLARE_REQUEST_AT:
+        wait = REQUEST_INTERVAL_SECONDS - (time.monotonic() - LAST_CLOUDFLARE_REQUEST_AT)
+        if wait > 0:
+            print(f"CLOUDFLARE_REQUEST_PACING sleep_seconds={wait:.1f}")
+            time.sleep(wait)
+    LAST_CLOUDFLARE_REQUEST_AT = time.monotonic()
+
+
 def cloudflare_search_candidates(platform, query):
-    """Use the bounded Worker Browser Run search only when native discovery is empty."""
+    """Use at most one bounded Worker search per run to preserve one enrichment call."""
+    global CLOUDFLARE_SEARCH_USED_THIS_RUN
+    if CLOUDFLARE_SEARCH_USED_THIS_RUN:
+        raise RuntimeError("cloudflare_search_once_per_run_reached")
     if not CLOUDFLARE_TOKEN:
         raise RuntimeError("SOCIAL_DEEP_BACKUP_TOKEN missing for discovery fallback")
 
@@ -429,6 +444,8 @@ def cloudflare_search_candidates(platform, query):
 
     # Search and profile collection share the same per-run Worker budget.
     CLOUDFLARE_CALLS_THIS_RUN += 1
+    CLOUDFLARE_SEARCH_USED_THIS_RUN = True
+    pace_cloudflare_request()
     started = time.monotonic()
     response = session.post(
         f"{CLOUDFLARE_URL}/search",
@@ -517,7 +534,7 @@ def discover(p):
     # route. Use it only when native discovery yields no relevant candidates.
     # Candidate URLs from this fallback are not trusted as leads until profile
     # enrichment and the strict China/manufacturer relevance check both pass.
-    if len(ranked) < MAX_ITEMS and CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+    if len(ranked) < MAX_ITEMS and CLOUDFLARE_TOKEN and not CLOUDFLARE_SEARCH_USED_THIS_RUN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
         fallback_query = NATIVE_QUERIES[p][0]
         try:
             fallback_results = cloudflare_search_candidates(p, fallback_query)
@@ -648,6 +665,7 @@ def cloudflare_profile(p, url):
     # Count the request before sending it so a failed attempt still consumes
     # this run's one-call allowance.
     CLOUDFLARE_CALLS_THIS_RUN += 1
+    pace_cloudflare_request()
     started = time.monotonic()
     r = session.post(
         f"{CLOUDFLARE_URL}/collect",
