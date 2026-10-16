@@ -1,4 +1,4 @@
-import csv, json, os, re
+import csv, json, os, re, time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse, quote
@@ -11,9 +11,13 @@ DATA.mkdir(exist_ok=True)
 
 # Pilot scope: Chinese industrial-lubricant manufacturers only.
 # Keep Worker enrichment to two calls per run, below its four-actions/day allowance.
-MAX_ITEMS = min(5, max(1, int(os.getenv("SOCIAL_MAX_ITEMS", "5") or "5")))
+MAX_ITEMS = min(5, max(1, int(os.getenv("SOCIAL_MAX_ITEMS", "3") or "3")))
+REQUEST_INTERVAL_SECONDS = max(11.0, float(os.getenv("SOCIAL_REQUEST_INTERVAL_SECONDS", "15") or "15"))
+LAST_PROFILE_REQUEST_AT = 0.0
 CLOUDFLARE_CALLS_THIS_RUN = 0
 MAX_CLOUDFLARE_CALLS_PER_RUN = 2
+CLOUDFLARE_AUDIT = []
+DISCOVERY_COUNTS = {}
 PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").strip().lower().lstrip(chr(92) + "/")
 
 APIFY = os.getenv("APIFY_API_TOKEN", "").strip()
@@ -29,6 +33,8 @@ RUN_ID = os.getenv(
     datetime.now(timezone.utc).strftime("social-%Y%m%d%H%M%S")
 )
 NOW = datetime.now(timezone.utc).isoformat()
+RUN_STARTED_AT = NOW
+REPORT_PATH = DATA / "social_run_report.json"
 
 PLATFORMS = ["linkedin", "facebook"]
 # AUTO rotates only the two requested platforms during focused collection.
