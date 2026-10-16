@@ -1,0 +1,45 @@
+{
+  "run_id": "38908883111",
+  "started_at_utc": "2026-10-16T13:34:37.528052+00:00",
+  "finished_at_utc": "2026-10-16T13:35:07.758942+00:00",
+  "outcome": "no_candidates",
+  "platforms": [
+    "facebook",
+    "linkedin"
+  ],
+  "max_valid_leads_per_run": 3,
+  "minimum_seconds_between_profile_enrichment_requests": 15.0,
+  "discovered_candidates_total": 0,
+  "discovered_candidates_by_platform": {
+    "facebook": 0,
+    "linkedin": 0
+  },
+  "new_qualified_leads_added": 0,
+  "provider_counts": {
+    "ScrapeCreators": 0,
+    "CloudflareDeepBackup": 0,
+    "failed": 0
+  },
+  "cloudflare": {
+    "token_configured": true,
+    "calls_used": 1,
+    "per_run_cap": 2,
+    "requests": [
+      {
+        "route": "/search",
+        "platform": "facebook",
+        "http_status": 200,
+        "elapsed_seconds": 2.71,
+        "outcome": "success",
+        "candidate_count": 0
+      }
+    ]
+  },
+  "profile_fetch_results": [],
+  "personal_profiles_saved_this_run": 0,
+  "notes": [
+    "Public LinkedIn company pages and public Facebook pages only.",
+    "HTTP success does not guarantee usable public profile fields.",
+    "Email and WhatsApp outreach remain disabled for this pilot."
+  ]
+}
