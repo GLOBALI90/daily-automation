@@ -1170,6 +1170,10 @@ def main():
 
         provider, data, errors = provider_chain(p, url)
         if not provider:
+            PROFILE_AUDIT.append({
+                "platform": p, "profile_url": url, "outcome": "provider_failed",
+                "errors": [str(error).split(":")[0] for error in errors]
+            })
             provider_counts["failed"] += 1
             print("SOCIAL_FETCH_AUDIT " + json.dumps({
                 "platform": p,
@@ -1197,6 +1201,11 @@ def main():
             "profile_fields_extracted" if len(extracted_fields) >= 2
             else "response_without_usable_profile_fields"
         )
+        profile_audit_row = {
+            "platform": p, "profile_url": url, "provider": provider,
+            "fetch_status": fetch_status, "extracted_fields": extracted_fields
+        }
+        PROFILE_AUDIT.append(profile_audit_row)
         print("SOCIAL_FETCH_AUDIT " + json.dumps({
             "platform": p,
             "discovery_method": discovery_method,
@@ -1210,8 +1219,10 @@ def main():
         }, ensure_ascii=False))
 
         if not relevant_social_profile(p, surl or url, company, web, loc, bio):
+            profile_audit_row["outcome"] = "rejected_not_relevant"
             print(f"Rejected low-confidence social result: platform={p}; discovered_url={url}; returned_profile_url={returned_url or 'NOT_RETURNED'}")
             continue
+        profile_audit_row["outcome"] = "accepted_relevant"
 
         if (p, surl.rstrip("/")) in seen:
             continue
