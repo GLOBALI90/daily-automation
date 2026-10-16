@@ -23,17 +23,14 @@ def fallback_queries():
     city_b = cities[1] if len(cities) > 1 else cities[0]
     zone = CHINA_INDUSTRIAL_ZONES[(len(cities) + len(region)) % len(CHINA_INDUSTRIAL_ZONES)]
     return [
-        f'"{sector}" procurement purchasing importer manufacturer "{region}" "{city_a}" China contact -jobs -careers -hiring -article -blog -directory -news',
-        f'"{sector}" "industrial park" "{region}" China factory purchasing sourcing procurement "{zone}" -jobs -careers -article -blog -directory -news',
-        f'"{sector}" industrial consumer buyer supplier "{city_a}" OR "{city_b}" China company contact procurement -jobs -careers -article -blog -directory -news',
+        f'"industrial lubricant manufacturer" OR "lubricating oil producer" "{region}" "{city_a}" China contact -jobs -careers -hiring -article -blog -directory -news',
+        f'"industrial lubricants" "blending plant" OR manufacturer "{region}" China "{zone}" -jobs -careers -article -blog -directory -news',
+        f'"工业润滑油" OR "工业润滑脂" 生产厂家 中国 "{city_a}" 联系方式 -招聘 -新闻',
     ]
 
+# Pilot scope: one target segment only until lead quality is verified.
 SECTORS = [
-    ("petroleum products", "refineries, fuel distributors, petroleum importers, oil & gas industrial consumers"),
-    ("chemicals", "chemical manufacturers, industrial chemical consumers, chemical importers"),
-    ("petrochemicals", "petrochemical manufacturers, polymer/feedstock consumers, petrochemical procurement teams"),
-    ("steel", "steel processors, fabricators, mills, construction and industrial consumers, steel importers"),
-    ("renewable energy", "solar, wind, battery and renewable-energy project companies with procurement needs"),
+    ("industrial lubricants", "Chinese industrial-lubricant manufacturers, lubricating-oil and industrial-grease producers, lubricant blending plants"),
 ]
 
 CHINA_REGIONS = [
@@ -112,11 +109,12 @@ def domain(url):
 
 
 INDUSTRY_TERMS = (
-    "chemical", "chemicals", "petrochemical", "petrochemicals", "petroleum",
-    "oil and gas", "oil & gas", "refinery", "refineries", "steel", "metal",
-    "industrial", "manufacturer", "manufacturing", "factory", "factories",
-    "polymer", "resin", "fertilizer", "solvent", "coating", "solar", "wind",
-    "battery", "renewable energy", "raw material", "feedstock"
+    "industrial lubricant", "industrial lubricants", "lubricant manufacturer",
+    "lubricants manufacturer", "lubricating oil", "lubricating oils",
+    "lubricating grease", "industrial grease", "grease manufacturer",
+    "metalworking fluid", "hydraulic oil", "gear oil", "compressor oil",
+    "turbine oil", "lubricant blending", "润滑油", "工业润滑油",
+    "润滑脂", "工业润滑脂", "润滑油厂家", "润滑油生产", "润滑油制造商"
 )
 BUYER_TERMS = (
     "company", "group", "limited", "ltd", "corporation", "corp", "manufacturer",
@@ -169,10 +167,10 @@ def looks_like_reject(title, url, snippet, query=""):
 
     strong_buyer_signals = (
         "manufacturer", "manufacturing", "factory", "factories", "supplier",
-        "suppliers", "procurement", "purchasing", "importer", "importers",
-        "refinery", "refineries", "plant", "plants", "limited", "ltd",
-        "corporation", " corp", "company", "group", "chemicals", "chemical",
-        "steel", "petrochemical", "petroleum", "industrial materials"
+        "suppliers", "producer", "production", "blending plant", "procurement",
+        "purchasing", "importer", "importers", "plant", "plants", "limited", "ltd",
+        "corporation", " corp", "company", "group", "industrial lubricant",
+        "lubricating oil", "lubricating grease", "industrial grease", "润滑油", "润滑脂"
     )
     if not any(signal in text for signal in strong_buyer_signals):
         return True
@@ -249,8 +247,9 @@ def plan_queries(existing_domains):
     excluded_text = ", ".join(sorted(existing_domains)[-80:])
     prompt = f"""You are the search planner for {COMPANY['brand']} ({COMPANY['legal_name']}).
 TARGET COUNTRY: China only.
-Business sectors: petroleum products, chemicals, petrochemicals, steel, renewable energy.
-Target customers: direct buyers, industrial consumers, raw-material consumers, importers and procurement companies.
+PILOT SEGMENT: industrial-lubricant manufacturers and industrial-grease/lubricating-oil producers only.
+Do not rotate into petroleum products, generic chemicals, steel, renewable energy, or unrelated sectors.
+Target companies: operating Chinese lubricant manufacturers, lubricant blending plants, and industrial grease/lubricating-oil producers with official company websites and public contact pages.
 This run should prioritize: {sector} ({examples}).
 Geographic focus for this run: China, {region}; prioritize these cities/districts where relevant: {city_text}.
 Also actively search industrial parks, industrial estates, economic and technological development zones, chemical parks, petrochemical zones, steel bases, manufacturing clusters and factory districts in China.
@@ -342,7 +341,7 @@ def search(query, num=RESULTS_PER_QUERY, exclude_domains=None):
 
 def infer_product(text):
     t = text.lower()
-    for word, product in [("petrochemical", "Petrochemicals"), ("chemical", "Chemicals"), ("petroleum", "Petroleum products"), ("steel", "Steel"), ("renewable", "Renewable energy")]:
+    for word, product in [("industrial lubricant", "Industrial lubricants"), ("lubricating oil", "Industrial lubricants"), ("lubricating grease", "Industrial lubricants"), ("润滑油", "Industrial lubricants"), ("润滑脂", "Industrial lubricants")]:
         if word in t:
             return product
     return ""
