@@ -243,7 +243,7 @@ class ProviderChainTests(unittest.TestCase):
             0,
         )
 
-    def test_discovery_can_enrich_auto_parts_factory_when_location_is_missing(self):
+    def test_discovery_rejects_candidates_without_china_evidence(self):
         candidate = {
             "title": "Example Industrial Lubricants Manufacturer",
             "content": "Automotive components factory and production supplier",
@@ -252,7 +252,46 @@ class ProviderChainTests(unittest.TestCase):
             "linkedin", candidate,
             "https://www.linkedin.com/company/example-auto-parts"
         )
+        self.assertEqual(score, 0)
+
+    def test_discovery_accepts_china_lubricant_manufacturer_evidence(self):
+        candidate = {
+            "title": "Jiangsu Industrial Lubricants Factory",
+            "content": "Industrial lubricant manufacturer and production factory in Jiangsu, China",
+        }
+        score = social.social_candidate_score(
+            "linkedin", candidate,
+            "https://www.linkedin.com/company/jiangsu-lubricants"
+        )
         self.assertGreater(score, 0)
+
+    def test_worker_search_fallback_tops_up_partial_native_discovery(self):
+        native = {
+            "url": "https://www.linkedin.com/company/jiangsu-lubricants",
+            "title": "Jiangsu Industrial Lubricants Factory",
+            "content": "Industrial lubricant manufacturer in Jiangsu China",
+        }
+        class Response:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"success": True, "results": [{
+                    "platform": "linkedin",
+                    "candidates": ["https://www.linkedin.com/company/another-lubricant"],
+                }]}
+
+        with (
+            patch.object(social, "NATIVE_QUERIES", {"linkedin": ["query one"]}),
+            patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
+            patch.object(social, "CLOUDFLARE_CALLS_THIS_RUN", 0),
+            patch.object(social, "native_candidates", return_value=[native]),
+            patch.object(social.session, "post", return_value=Response()) as post,
+        ):
+            found = social.discover("linkedin")
+
+        self.assertEqual(len(found), 2)
+        self.assertTrue(any(item[0].endswith("another-lubricant") for item in found))
+        post.assert_called_once()
 
 
     def test_extract_public_email_and_labeled_whatsapp_from_bio(self):
