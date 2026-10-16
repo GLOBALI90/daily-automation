@@ -428,6 +428,7 @@ def cloudflare_search_candidates(platform, query):
 
     # Search and profile collection share the same per-run Worker budget.
     CLOUDFLARE_CALLS_THIS_RUN += 1
+    started = time.monotonic()
     response = session.post(
         f"{CLOUDFLARE_URL}/search",
         headers={
