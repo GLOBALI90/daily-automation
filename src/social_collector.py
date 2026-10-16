@@ -1068,7 +1068,7 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
             "Email and WhatsApp outreach remain disabled for this pilot."
         ]
     }
-    REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\\n", encoding="utf-8")
+    REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print("SOCIAL_RUN_REPORT " + json.dumps({
         "report_path": str(REPORT_PATH.relative_to(ROOT)),
         "outcome": outcome,
