@@ -63,6 +63,38 @@ class ProviderChainTests(unittest.TestCase):
             self.assertTrue(data)
             cf.assert_called_once_with(platform, url)
 
+    def test_cloudflare_search_fallback_runs_when_native_discovery_is_empty(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {
+                    "success": True,
+                    "results": [{
+                        "platform": "linkedin",
+                        "candidates": [
+                            "https://www.linkedin.com/company/example-lubricants"
+                        ],
+                        "candidate_count": 1,
+                    }],
+                }
+
+        with (
+            patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
+            patch.object(social, "CLOUDFLARE_CALLS_THIS_RUN", 0),
+            patch.object(social, "native_candidates", return_value=[]),
+            patch.object(social.session, "post", return_value=Response()) as post,
+        ):
+            found = social.discover("linkedin")
+
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0][0], "https://www.linkedin.com/company/example-lubricants")
+        self.assertEqual(found[0][2], "cloudflare_browser_search_fallback")
+        post.assert_called_once()
+        self.assertTrue(post.call_args.args[0].endswith("/search"))
+        self.assertEqual(post.call_args.kwargs["json"]["platform"], "linkedin")
+
     def test_auto_falls_back_to_linkedin_when_facebook_has_no_candidates(self):
         linkedin_result = [(
             "https://www.linkedin.com/company/example-chemical",
