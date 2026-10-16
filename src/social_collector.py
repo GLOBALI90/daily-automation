@@ -647,6 +647,7 @@ def cloudflare_profile(p, url):
     # Count the request before sending it so a failed attempt still consumes
     # this run's one-call allowance.
     CLOUDFLARE_CALLS_THIS_RUN += 1
+    started = time.monotonic()
     r = session.post(
         f"{CLOUDFLARE_URL}/collect",
         headers={
@@ -657,10 +658,27 @@ def cloudflare_profile(p, url):
         timeout=90
     )
     if r.status_code >= 400:
+        CLOUDFLARE_AUDIT.append({
+            "route": "/collect", "platform": p, "profile_url": url,
+            "http_status": r.status_code, "elapsed_seconds": round(time.monotonic() - started, 2),
+            "outcome": "http_error"
+        })
         raise RuntimeError(
             f"cloudflare_http_{r.status_code}:{r.text[:300]}"
         )
-    return r.json()
+    data = r.json()
+    CLOUDFLARE_AUDIT.append({
+        "route": "/collect", "platform": p, "profile_url": url,
+        "http_status": r.status_code, "elapsed_seconds": round(time.monotonic() - started, 2),
+        "outcome": "response_received",
+        "response_keys": sorted(list(data.keys())) if isinstance(data, dict) else ["<non_object_json>"]
+    })
+    print(
+        f"CLOUDFLARE_COLLECT_AUDIT platform={p}; http_status={r.status_code}; "
+        f"elapsed_seconds={CLOUDFLARE_AUDIT[-1]['elapsed_seconds']}; "
+        f"response_keys={','.join(CLOUDFLARE_AUDIT[-1]['response_keys'])}"
+    )
+    return data
 
 
 def provider_chain(p, url):
