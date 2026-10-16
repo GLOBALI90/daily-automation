@@ -11,13 +11,13 @@ import gemini_utils
 class ProviderChainTests(unittest.TestCase):
     def test_scrapecreators_is_only_active_profile_provider(self):
         valid_profile = (
-            "Example Auto Parts Company",
+            "Example Industrial Lubricants Company",
             "https://example.cn",
             "Jiangsu, China",
-            "Example Auto Parts Company",
+            "Example Industrial Lubricants Company",
             "",
             "",
-            "Automotive parts factory and manufacturer in China",
+            "Industrial lubricants factory and manufacturer in China",
             "120",
             "",
             "https://www.facebook.com/example",
@@ -25,7 +25,7 @@ class ProviderChainTests(unittest.TestCase):
 
         with (
             patch.object(social, "cloudflare_profile") as cf,
-            patch.object(social, "scrapecreators_profile", return_value={"name": "Example Auto Parts Company"}) as sc,
+            patch.object(social, "scrapecreators_profile", return_value={"name": "Example Industrial Lubricants Company"}) as sc,
             patch.object(social, "normalize_provider", return_value=valid_profile),
             patch.object(social, "relevant_social_profile", return_value=True),
         ):
@@ -39,6 +39,29 @@ class ProviderChainTests(unittest.TestCase):
         cf.assert_not_called()
         sc.assert_called_once()
         self.assertFalse(hasattr(social, "socialfetch_profile"))
+
+    def test_cloudflare_is_fallback_for_both_linkedin_and_facebook(self):
+        for platform, url in (
+            ("linkedin", "https://www.linkedin.com/company/example-lubricants"),
+            ("facebook", "https://www.facebook.com/examplelubricants"),
+        ):
+            valid_profile = (
+                "Example Industrial Lubricants", "https://example.cn", "Jiangsu, China",
+                "Example Industrial Lubricants", "", "", "Industrial lubricants manufacturer factory in China",
+                "100", "", url,
+            )
+            with (
+                patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
+                patch.object(social, "CLOUDFLARE_CALLS_THIS_RUN", 0),
+                patch.object(social, "scrapecreators_profile", side_effect=RuntimeError("temporary provider failure")),
+                patch.object(social, "cloudflare_profile", return_value={"name": "Example Industrial Lubricants"}) as cf,
+                patch.object(social, "normalize_provider", return_value=valid_profile),
+                patch.object(social, "relevant_social_profile", return_value=True),
+            ):
+                provider, data, errors = social.provider_chain(platform, url)
+            self.assertEqual(provider, "CloudflareDeepBackup")
+            self.assertTrue(data)
+            cf.assert_called_once_with(platform, url)
 
     def test_auto_falls_back_to_linkedin_when_facebook_has_no_candidates(self):
         linkedin_result = [(
@@ -190,7 +213,7 @@ class ProviderChainTests(unittest.TestCase):
 
     def test_discovery_can_enrich_auto_parts_factory_when_location_is_missing(self):
         candidate = {
-            "title": "Example Auto Parts Manufacturer",
+            "title": "Example Industrial Lubricants Manufacturer",
             "content": "Automotive components factory and production supplier",
         }
         score = social.social_candidate_score(
@@ -202,7 +225,7 @@ class ProviderChainTests(unittest.TestCase):
 
     def test_extract_public_email_and_labeled_whatsapp_from_bio(self):
         email, whatsapp, phone = social.extract_public_contacts(
-            "OEM auto parts. Contact: sales@example.cn | WhatsApp: +86 189 9845 3346",
+            "OEM industrial lubricants. Contact: sales@example.cn | WhatsApp: +86 189 9845 3346",
             "",
             "",
         )
@@ -256,13 +279,13 @@ class ProviderChainTests(unittest.TestCase):
     def test_discover_returns_multiple_ranked_candidates_across_queries(self):
         first = {
             "url": "https://www.linkedin.com/company/jiangsu-auto-parts-maker",
-            "title": "Jiangsu Auto Parts Factory",
+            "title": "Jiangsu Industrial Lubricants Factory",
             "content": "Automotive components manufacturer and factory in Jiangsu China",
         }
         second = {
             "url": "https://www.linkedin.com/company/china-engine-components",
             "title": "China Engine Components Manufacturer",
-            "content": "Chinese engine parts factory and automotive components production",
+            "content": "Chinese lubricating oils factory and industrial lubricants production",
         }
         with (
             patch.object(social, "NATIVE_QUERIES", {"linkedin": ["query one", "query two"]}),
