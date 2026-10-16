@@ -44,7 +44,6 @@ def is_pilot_target(row):
         (row.get(field) or "").strip()
         for field in (
             "company_name", "website", "social_url", "social_bio", "evidence",
-            "industry", "product_interest", "buyer_type",
         )
     ).lower()
     has_lubricant = any(term in evidence for term in PILOT_LUBRICANT_TERMS)
