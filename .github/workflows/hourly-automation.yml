@@ -13,12 +13,13 @@ on:
           - linkedin
         default: auto
       social_max_items:
-        description: "Collect up to five valid leads per run; Cloudflare Worker remains capped separately"
+        description: "Conservative pilot: collect up to three qualified public-company leads per run"
         required: false
         type: choice
         options:
+          - "3"
           - "5"
-        default: "5"
+        default: "3"
       outreach_enabled:
         description: "Enable outbound email and WhatsApp delivery. Leave off to collect/review leads without sending."
         required: false
@@ -71,7 +72,8 @@ jobs:
           SOCIAL_DEEP_BACKUP_TOKEN: ${{ secrets.SOCIAL_DEEP_BACKUP_TOKEN }}
           SOCIAL_DEEP_BACKUP_URL: ${{ vars.SOCIAL_DEEP_BACKUP_URL || 'https://patient-moon-b87e.mohamadsbrfit760li.workers.dev' }}
           SOCIAL_PLATFORM: ${{ inputs.social_platform || 'auto' }}
-          SOCIAL_MAX_ITEMS: ${{ inputs.social_max_items || '5' }}
+          SOCIAL_MAX_ITEMS: ${{ inputs.social_max_items || '3' }}
+          SOCIAL_REQUEST_INTERVAL_SECONDS: '15'
         run: python src/social_collector.py
 
       - name: Generate outreach drafts (delivery controlled by outreach_enabled; max five leads per run)
@@ -101,3 +103,12 @@ jobs:
           else
             echo "No data changes to save."
           fi
+
+      - name: Upload social and Cloudflare run report
+        if: ${{ always() && !inputs.validation_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: social-run-report-${{ github.run_id }}
+          path: data/social_run_report.json
+          if-no-files-found: warn
+          retention-days: 14
