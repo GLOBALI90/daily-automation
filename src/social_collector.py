@@ -379,21 +379,26 @@ def _linkedin_provider_candidates(query):
             continue
         url = canonical_linkedin_url(url).rstrip("/")
         path = urlparse(url).path.lower()
-        # This pilot targets manufacturers, not individual employee profiles.
-        if not path.startswith("/company/") or url in seen:
+        # Accept public company pages and public personal profiles. Personal
+        # profiles must pass a separate China + industry + decision-role gate.
+        if not (path.startswith("/company/") or path.startswith("/in/")) or url in seen:
             continue
         seen.add(url)
         title = val(author.get("name") or post.get("authorName"))
         snippet = val(post.get("description") or post.get("text") or post.get("content"))
+        headline = val(author.get("headline") or author.get("occupation") or author.get("title"))
+        current_company = val(author.get("currentCompany") or author.get("company") or author.get("companyName"))
+        location = val(author.get("location") or author.get("geoLocation"))
         LINKEDIN_SEARCH_RESULTS[url] = {
-            "title": title,
-            "snippet": snippet,
+            "title": title, "snippet": snippet, "headline": headline,
+            "current_company": current_company, "location": location,
             "search_provider": "ScrapeCreators LinkedIn Search",
         }
         out.append({
             "url": url,
             "title": title,
-            "content": " ".join([title, snippet]),
+            "content": " ".join([title, snippet, headline, current_company, location]),
+            "headline": headline, "current_company": current_company, "location": location,
             "search_provider": "ScrapeCreators LinkedIn Search",
         })
     print(f"LinkedIn provider search: results={len(posts)}; candidate_profiles={len(out)}")
