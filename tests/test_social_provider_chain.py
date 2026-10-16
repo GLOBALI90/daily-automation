@@ -83,6 +83,8 @@ class ProviderChainTests(unittest.TestCase):
         with (
             patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
             patch.object(social, "CLOUDFLARE_CALLS_THIS_RUN", 0),
+            patch.object(social, "CLOUDFLARE_SEARCH_USED_THIS_RUN", False),
+            patch.object(social, "LAST_CLOUDFLARE_REQUEST_AT", 0.0),
             patch.object(social, "native_candidates", return_value=[]),
             patch.object(social.session, "post", return_value=Response()) as post,
         ):
@@ -290,6 +292,8 @@ class ProviderChainTests(unittest.TestCase):
             patch.object(social, "NATIVE_QUERIES", {"linkedin": ["query one"]}),
             patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
             patch.object(social, "CLOUDFLARE_CALLS_THIS_RUN", 0),
+            patch.object(social, "CLOUDFLARE_SEARCH_USED_THIS_RUN", False),
+            patch.object(social, "LAST_CLOUDFLARE_REQUEST_AT", 0.0),
             patch.object(social, "native_candidates", return_value=[native]),
             patch.object(social.session, "post", return_value=Response()) as post,
         ):
