@@ -39,7 +39,7 @@ def llm(prompt):
 
 def make_message(row):
     prompt = f"""You are the senior B2B trade development assistant for {COMPANY['brand']} ({COMPANY['legal_name']}).
-Business: international sourcing and trade in petroleum products, chemicals, petrochemicals, steel and renewable energy.
+Business: international B2B sourcing and trade focused in this pilot on industrial lubricants, lubricating oils and industrial greases.
 Website: {COMPANY['website']}
 WhatsApp: {COMPANY['whatsapp']}
 
@@ -59,8 +59,8 @@ PRICE POSITIONING RULES:
 
 PERSONALIZATION RULES:
 - Tailor the opening and value proposition to the company's industry, product interest, location and evidence.
-- For steel-related buyers, focus on steel/raw-material procurement and production supply needs when supported by evidence.
-- For petrochemical/chemical buyers, focus on relevant feedstocks, industrial chemicals or petrochemical supply only when supported by evidence.
+- For industrial-lubricant companies, focus only on lubricant products, blending/manufacturing capabilities or industrial-grease needs supported by evidence.
+- Do not introduce steel, generic chemicals, fuel or unrelated products into this pilot message.
 - Mention only products that are supported by the row or by the company's stated business; do not force a product into an irrelevant lead.
 - Focus on business outcomes: lower procurement cost, alternative sourcing, supply continuity and reduced sourcing friction.
 - Keep the email professional, natural and direct. Avoid exaggerated marketing language.
@@ -95,8 +95,8 @@ Email body
         f"SUBJECT: Potential sourcing cooperation with {company}\n\n"
         f"Hello {company} team,\n\n"
         f"I’m reaching out from {COMPANY['brand']} about possible international sourcing cooperation. "
-        "Our work covers steel, industrial chemicals and petrochemical products. "
-        "If any of these are relevant to your current or upcoming sourcing needs, "
+        "Our current pilot focuses on industrial lubricants, lubricating oils and industrial greases. "
+        "If these products are relevant to your current or upcoming sourcing needs, "
         "we would be glad to review your specifications and discuss possible options.\n\n"
         f"Best regards,\n{COMPANY['brand']}\n{website}"
     )
