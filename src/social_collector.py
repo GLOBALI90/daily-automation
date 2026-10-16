@@ -362,7 +362,8 @@ def _linkedin_provider_candidates(query):
             continue
         url = canonical_linkedin_url(url).rstrip("/")
         path = urlparse(url).path.lower()
-        if not (path.startswith("/in/") or path.startswith("/company/")) or url in seen:
+        # This pilot targets manufacturers, not individual employee profiles.
+        if not path.startswith("/company/") or url in seen:
             continue
         seen.add(url)
         title = val(author.get("name") or post.get("authorName"))
