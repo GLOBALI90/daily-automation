@@ -1042,6 +1042,46 @@ def discover_with_auto_fallback(platform, is_auto):
     return alternate, discover(alternate)
 
 
+def write_run_report(platforms, discovered, added, provider_counts, outcome):
+    report = {
+        "run_id": RUN_ID,
+        "started_at_utc": RUN_STARTED_AT,
+        "finished_at_utc": datetime.now(timezone.utc).isoformat(),
+        "outcome": outcome,
+        "platforms": platforms,
+        "max_valid_leads_per_run": MAX_ITEMS,
+        "minimum_seconds_between_profile_enrichment_requests": REQUEST_INTERVAL_SECONDS,
+        "discovered_candidates_total": discovered,
+        "discovered_candidates_by_platform": DISCOVERY_COUNTS,
+        "new_qualified_leads_added": added,
+        "provider_counts": provider_counts,
+        "cloudflare": {
+            "token_configured": bool(CLOUDFLARE_TOKEN),
+            "calls_used": CLOUDFLARE_CALLS_THIS_RUN,
+            "per_run_cap": MAX_CLOUDFLARE_CALLS_PER_RUN,
+            "requests": CLOUDFLARE_AUDIT
+        },
+        "profile_fetch_results": PROFILE_AUDIT,
+        "notes": [
+            "Public LinkedIn company pages and public Facebook pages only.",
+            "HTTP success does not guarantee usable public profile fields.",
+            "Email and WhatsApp outreach remain disabled for this pilot."
+        ]
+    }
+    REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\\n", encoding="utf-8")
+    print("SOCIAL_RUN_REPORT " + json.dumps({
+        "report_path": str(REPORT_PATH.relative_to(ROOT)),
+        "outcome": outcome,
+        "discovered_candidates": discovered,
+        "new_qualified_leads_added": added,
+        "cloudflare_calls": CLOUDFLARE_CALLS_THIS_RUN,
+        "cloudflare_requests": [
+            {k: v for k, v in item.items() if k != "profile_url"}
+            for item in CLOUDFLARE_AUDIT
+        ]
+    }, ensure_ascii=False), flush=True)
+
+
 def main():
     # Auto mode actively searches both allowed networks on every run.
     # Manual mode still restricts collection to the explicitly selected network.
