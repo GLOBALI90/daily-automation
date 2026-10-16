@@ -1090,6 +1090,7 @@ def main():
     found = []
     for target_platform in platforms_to_collect:
         platform_candidates = discover(target_platform)
+        DISCOVERY_COUNTS[target_platform] = len(platform_candidates)
         found.extend((target_platform, url, query, method)
                      for url, query, method in platform_candidates)
         print(
@@ -1099,6 +1100,7 @@ def main():
 
     if not found:
         print("No Facebook or LinkedIn candidates found")
+        write_run_report(platforms_to_collect, 0, 0, {"ScrapeCreators": 0, "CloudflareDeepBackup": 0, "failed": 0}, "no_candidates")
         return
 
     rows = []
@@ -1287,6 +1289,7 @@ def main():
         f"cloudflare_calls={CLOUDFLARE_CALLS_THIS_RUN}/{MAX_CLOUDFLARE_CALLS_PER_RUN}; "
         f"providers={json.dumps(provider_counts, ensure_ascii=False)}"
     )
+    write_run_report(platforms_to_collect, len(found), added, provider_counts, "completed")
 
 
 if __name__ == "__main__":
