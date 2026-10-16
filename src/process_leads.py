@@ -16,6 +16,45 @@ LEADS = ROOT / "data/leads.csv"
 OUTREACH = ROOT / "data/outreach.csv"
 
 OUTREACH_LIMIT_PER_RUN = 5
+
+PILOT_LUBRICANT_TERMS = (
+    "industrial lubricant", "industrial lubricants", "lubricating oil",
+    "lubricating oils", "lubricating grease", "industrial grease",
+    "hydraulic oil", "gear oil", "compressor oil", "turbine oil",
+    "metalworking fluid", "润滑油", "工业润滑油", "润滑脂", "工业润滑脂",
+)
+PILOT_PRODUCER_TERMS = (
+    "manufacturer", "manufacturing", "factory", "producer", "production",
+    "blending plant", "工厂", "生产厂家", "制造厂", "制造商", "生产企业", "调和厂",
+)
+PILOT_CHINA_TERMS = (
+    "china", "chinese", "jiangsu", "guangdong", "zhejiang", "shandong",
+    "shanghai", "tianjin", "hebei", "liaoning", "fujian", "hubei",
+    "suzhou", "nanjing", "wuxi", "changzhou", "nantong", "guangzhou",
+    "shenzhen", "foshan", "dongguan", "huizhou", "ningbo", "hangzhou",
+    "qingdao", "dongying", "yantai", "weifang", "jinan", "tangshan",
+    "cangzhou", "dalian", "shenyang", "yingkou", "xiamen", "quanzhou",
+    "fuzhou", "wuhan", "yichang",
+)
+
+def is_pilot_target(row):
+    """Only allow evidenced China-based industrial-lubricant manufacturers."""
+    website = (row.get("website") or "").strip().lower()
+    evidence = " ".join(
+        (row.get(field) or "").strip()
+        for field in (
+            "company_name", "website", "social_url", "social_bio", "evidence",
+            "industry", "product_interest", "buyer_type",
+        )
+    ).lower()
+    has_lubricant = any(term in evidence for term in PILOT_LUBRICANT_TERMS)
+    has_producer = any(term in evidence for term in PILOT_PRODUCER_TERMS)
+    has_china = any(term in evidence for term in PILOT_CHINA_TERMS) or website.endswith(".cn")
+    return (
+        (row.get("country") or "").strip().lower() == "china"
+        and has_lubricant and has_producer and has_china
+    )
+
 AUTH_USERNAME = "saberi.export.import@gmail.com"
 FROM_ADDRESS = "saberi.export.import@gmail.com"
 
@@ -282,6 +321,7 @@ def main():
     candidates = []
     skipped_noncurrent = 0
     skipped_non_social = 0
+    skipped_out_of_scope = 0
     for candidate in rows:
         is_current = bool(current_run_id and candidate.get("run_id") == current_run_id)
         platform = (candidate.get("platform") or "").strip().lower()
@@ -298,11 +338,18 @@ def main():
         if not is_allowed_social:
             skipped_non_social += 1
             continue
-        # Revisit only unresolved auto-parts social leads from earlier runs;
-        # never revive old web-search rows or historical unrelated industries.
-        industry = (candidate.get("industry") or "").strip().lower()
-        if not is_current and industry != "automotive parts":
+        # Never spend model/API quota on stale rows; only leads written by this
+        # run and independently verified as China lubricant manufacturers qualify.
+        if not is_current:
             skipped_noncurrent += 1
+            continue
+        if not is_pilot_target(candidate):
+            skipped_out_of_scope += 1
+            print(
+                "OUTREACH_SKIP_OUT_OF_SCOPE "
+                f"company={(candidate.get('company_name') or 'unknown')[:100]}",
+                flush=True,
+            )
             continue
         key = lead_key(candidate)
         if key and key not in done:
@@ -311,6 +358,7 @@ def main():
     print(
         f"OUTREACH_QUEUE current_run_social_candidates={len(candidates)} "
         f"skipped_historical={skipped_noncurrent} skipped_non_social={skipped_non_social} "
+        f"skipped_out_of_scope={skipped_out_of_scope} "
         f"already_recorded={len(done)} limit={OUTREACH_LIMIT_PER_RUN}",
         flush=True,
     )
