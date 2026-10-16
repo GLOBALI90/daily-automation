@@ -17,6 +17,7 @@ LAST_PROFILE_REQUEST_AT = 0.0
 CLOUDFLARE_CALLS_THIS_RUN = 0
 MAX_CLOUDFLARE_CALLS_PER_RUN = 2
 CLOUDFLARE_AUDIT = []
+PROFILE_AUDIT = []
 DISCOVERY_COUNTS = {}
 PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").strip().lower().lstrip(chr(92) + "/")
 
@@ -682,6 +683,13 @@ def cloudflare_profile(p, url):
 
 
 def provider_chain(p, url):
+    global LAST_PROFILE_REQUEST_AT
+    if LAST_PROFILE_REQUEST_AT:
+        wait = REQUEST_INTERVAL_SECONDS - (time.monotonic() - LAST_PROFILE_REQUEST_AT)
+        if wait > 0:
+            print(f"SOCIAL_REQUEST_PACING sleep_seconds={wait:.1f}; platform={p}")
+            time.sleep(wait)
+    LAST_PROFILE_REQUEST_AT = time.monotonic()
     errors = []
 
     # A non-empty HTTP response is not necessarily a successful profile fetch.
