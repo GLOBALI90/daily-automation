@@ -109,6 +109,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: social-run-report-${{ github.run_id }}
-          path: data/social_run_report.json
+          path: |
+            data/social_run_report.json
+            data/personal_profiles.csv
           if-no-files-found: warn
           retention-days: 14
