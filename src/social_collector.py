@@ -416,10 +416,59 @@ def native_candidates(platform, query):
     raise ValueError(f"Unsupported social platform: {platform}")
 
 
+def personal_profile_candidate_score(result, url):
+    """Score public LinkedIn people only when China, industry and role evidence exists."""
+    if not urlparse(url).path.lower().startswith("/in/"):
+        return 0
+    text = " ".join([
+        val(result.get("title")), val(result.get("content")),
+        val(result.get("headline")), val(result.get("current_company")),
+        val(result.get("location")), url
+    ]).lower()
+    if not any(term in text for term in INDUSTRY_TERMS):
+        return 0
+    if not any(term in text for term in CHINA_SIGNALS):
+        return 0
+    if not any(term in text for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS):
+        return 0
+    return 10 + sum(1 for term in CHINA_SIGNALS if term in text) + sum(
+        1 for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS if term in text
+    )
+
+
+def save_personal_profile(platform, url, public_name=""):
+    """Persist only public account identity/provenance; never store contact details."""
+    existing = []
+    if PERSONAL_PROFILES.exists():
+        with PERSONAL_PROFILES.open(encoding="utf-8", newline="") as handle:
+            existing = list(csv.DictReader(handle))
+    canonical = val(url).rstrip("/")
+    if not canonical or any(
+        row.get("platform") == platform and val(row.get("profile_url")).rstrip("/") == canonical
+        for row in existing
+    ):
+        return False
+    existing.append({
+        "platform": platform,
+        "public_name": val(public_name),
+        "profile_url": canonical,
+        "username": handle_from_url(canonical),
+        "run_id": RUN_ID,
+        "collected_at": NOW,
+    })
+    with PERSONAL_PROFILES.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=PERSONAL_PROFILE_FIELDS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(existing)
+    return True
+
+
 def social_candidate_score(platform, result, url):
     title = val(result.get("title"))
     snippet = val(result.get("content") or result.get("snippet") or result.get("description"))
     text = " ".join([title, snippet, url]).lower()
+    if platform == "linkedin" and urlparse(url).path.lower().startswith("/in/"):
+        return personal_profile_candidate_score(result, url)
     lubricant_hits = sum(1 for term in INDUSTRY_TERMS if term in text)
     producer_hits = sum(1 for term in (
         "factory", "manufacturer", "manufacturing", "producer", "production",
