@@ -7,6 +7,8 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 LEADS = DATA / "leads.csv"
+PERSONAL_PROFILES = DATA / "personal_profiles.csv"
+PERSONAL_PROFILE_FIELDS = ["platform", "public_name", "profile_url", "username", "run_id", "collected_at"]
 DATA.mkdir(exist_ok=True)
 
 # Pilot scope: Chinese industrial-lubricant manufacturers only.
@@ -133,7 +135,13 @@ COMPANY_TERMS = (
 BUYER_ROLE_TERMS = (
     "procurement", "purchasing", "purchase manager", "buyer", "sourcing",
     "supply chain", "import manager", "procurement manager", "purchasing manager",
-    "commercial manager", "trading", "raw material buyer"
+    "commercial manager", "trading", "raw material buyer", "采购", "采购经理"
+)
+DECISION_MAKER_TERMS = (
+    "owner", "founder", "co-founder", "ceo", "president", "director",
+    "general manager", "managing director", "export manager", "sales manager",
+    "business development", "commercial director", "总经理", "董事长",
+    "创始人", "销售经理", "出口经理", "业务发展"
 )
 CHINA_SIGNALS = (
     "china", "chinese", "jiangsu", "guangdong", "zhejiang", "shandong",
