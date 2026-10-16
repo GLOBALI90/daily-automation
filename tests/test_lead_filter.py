@@ -9,19 +9,19 @@ import lead_collector
 class LeadFilterTests(unittest.TestCase):
     def test_china_search_context_allows_company_domain_without_china_in_snippet(self):
         rejected = lead_collector.looks_like_reject(
-            "Jiangsu Chemical Manufacturing Co.",
+            "Jiangsu Industrial Lubricants Manufacturing Co.",
             "https://example.com",
-            "Industrial manufacturer with procurement and production operations.",
-            "chemical manufacturer procurement China Jiangsu",
+            "Industrial lubricants manufacturer with blending and production operations.",
+            "industrial lubricant manufacturer China Jiangsu",
         )
         self.assertFalse(rejected)
 
     def test_editorial_article_is_rejected(self):
         rejected = lead_collector.looks_like_reject(
-            "Top chemical suppliers in China: industry guide",
+            "Top industrial lubricant suppliers in China: industry guide",
             "https://example.com/industry-guide",
-            "A guide to chemical companies.",
-            "chemical suppliers China",
+            "A guide to industrial lubricant companies.",
+            "industrial lubricant suppliers China",
         )
         self.assertTrue(rejected)
 
