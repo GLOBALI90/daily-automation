@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       social_platform:
-        description: "Collect from both Facebook and LinkedIn in auto mode"
+        description: "Try Facebook first, then LinkedIn if Facebook returns no candidates"
         required: false
         type: choice
         options:
