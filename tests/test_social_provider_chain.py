@@ -156,16 +156,22 @@ class ProviderChainTests(unittest.TestCase):
             ["gemini-3.6-flash", "gemini-3.6-flash", "gemini-3.8-flash"],
         )
 
-    def test_linkedin_company_uses_worker_then_company_actor_fallback(self):
+    def test_irrelevant_scrapecreators_profile_does_not_spend_worker_quota(self):
         company_url = "https://www.linkedin.com/company/jiangsu-example-chemicals"
         with (
+            patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
+            patch.object(social, "CLOUDFLARE_CALLS_THIS_RUN", 0),
             patch.object(social, "cloudflare_profile") as cf,
             patch.object(
                 social, "scrapecreators_profile",
                 return_value={"name": "Example Chemicals", "location": "India", "followers": 20},
             ),
-            # Reject the wrong-region profile; no paid fallback is attempted.
-            patch.object(social, "relevant_social_profile", side_effect=[False]),
+            # Provider data is sufficient to classify the page as out of scope.
+            patch.object(social, "normalize_provider", return_value=(
+                "Example Chemicals", "", "India", "Example Chemicals", "", "",
+                "Industrial lubricant manufacturer in India", "20", "",
+                company_url,
+            )),
         ):
             provider, data, errors = social.provider_chain("linkedin", company_url)
 
