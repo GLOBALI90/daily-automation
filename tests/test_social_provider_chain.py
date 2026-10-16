@@ -262,6 +262,44 @@ class ProviderChainTests(unittest.TestCase):
         )
         self.assertEqual(score, 0)
 
+    def test_relevant_public_linkedin_personal_profile_is_accepted_for_account_only_list(self):
+        candidate = {
+            "title": "Li Wei",
+            "content": "Procurement manager at Jiangsu industrial lubricants manufacturer in China",
+            "headline": "Procurement Manager",
+            "current_company": "Jiangsu Industrial Lubricants Manufacturer",
+            "location": "Jiangsu, China",
+        }
+        url = "https://www.linkedin.com/in/li-wei-procurement"
+        self.assertGreater(social.personal_profile_candidate_score(candidate, url), 0)
+        self.assertEqual(social.social_candidate_score("linkedin", candidate, url),
+                         social.personal_profile_candidate_score(candidate, url))
+
+    def test_personal_profile_storage_contains_no_contact_fields(self):
+        import csv
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "personal_profiles.csv"
+            with (
+                patch.object(social, "PERSONAL_PROFILES", path),
+                patch.object(social, "RUN_ID", "test-run"),
+                patch.object(social, "NOW", "2026-10-16T10:00:00+00:00"),
+            ):
+                saved = social.save_personal_profile(
+                    "linkedin", "https://www.linkedin.com/in/li-wei-procurement",
+                    "Li Wei"
+                )
+            self.assertTrue(saved)
+            with path.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["profile_url"], "https://www.linkedin.com/in/li-wei-procurement")
+            self.assertEqual(rows[0]["public_name"], "Li Wei")
+            self.assertEqual(set(rows[0].keys()), set(social.PERSONAL_PROFILE_FIELDS))
+            self.assertNotIn("email", rows[0])
+            self.assertNotIn("phone", rows[0])
+            self.assertNotIn("whatsapp", rows[0])
+
     def test_discovery_accepts_china_lubricant_manufacturer_evidence(self):
         candidate = {
             "title": "Jiangsu Industrial Lubricants Factory",
