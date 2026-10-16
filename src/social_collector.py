@@ -439,6 +439,10 @@ def cloudflare_search_candidates(platform, query):
         timeout=90,
     )
     if response.status_code >= 400:
+        CLOUDFLARE_AUDIT.append({
+            "route": "/search", "platform": platform, "http_status": response.status_code,
+            "elapsed_seconds": round(time.monotonic() - started, 2), "outcome": "http_error"
+        })
         raise RuntimeError(
             f"cloudflare_search_http_{response.status_code}:{response.text[:250]}"
         )
@@ -464,9 +468,14 @@ def cloudflare_search_candidates(platform, query):
         if len(candidates) >= MAX_ITEMS:
             break
 
+    CLOUDFLARE_AUDIT.append({
+        "route": "/search", "platform": platform, "http_status": response.status_code,
+        "elapsed_seconds": round(time.monotonic() - started, 2),
+        "outcome": "success", "candidate_count": len(candidates)
+    })
     print(
-        f"Cloudflare discovery fallback: platform={platform}; "
-        f"candidates={len(candidates)}; "
+        f"Cloudflare discovery fallback: platform={platform}; http_status={response.status_code}; "
+        f"elapsed_seconds={CLOUDFLARE_AUDIT[-1]['elapsed_seconds']}; candidates={len(candidates)}; "
         f"worker_actions={CLOUDFLARE_CALLS_THIS_RUN}/{MAX_CLOUDFLARE_CALLS_PER_RUN}"
     )
     return candidates
