@@ -397,6 +397,60 @@ def social_candidate_score(platform, result, url):
     return lubricant_hits * 5 + producer_hits * 3 + china_hits * 2
 
 
+def cloudflare_search_candidates(platform, query):
+    """Use the bounded Worker Browser Run search only when native discovery is empty."""
+    if not CLOUDFLARE_TOKEN:
+        raise RuntimeError("SOCIAL_DEEP_BACKUP_TOKEN missing for discovery fallback")
+
+    global CLOUDFLARE_CALLS_THIS_RUN
+    if CLOUDFLARE_CALLS_THIS_RUN >= MAX_CLOUDFLARE_CALLS_PER_RUN:
+        raise RuntimeError("cloudflare_per_run_cap_reached")
+
+    # Search and profile collection share the same per-run Worker budget.
+    CLOUDFLARE_CALLS_THIS_RUN += 1
+    response = session.post(
+        f"{CLOUDFLARE_URL}/search",
+        headers={
+            "Authorization": f"Bearer {CLOUDFLARE_TOKEN}",
+            "Content-Type": "application/json",
+        },
+        json={"query": query, "platform": platform, "max_items": MAX_ITEMS},
+        timeout=90,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"cloudflare_search_http_{response.status_code}:{response.text[:250]}"
+        )
+
+    payload = response.json()
+    results = payload.get("results", []) if isinstance(payload, dict) else []
+    candidates = []
+    for result in results if isinstance(results, list) else []:
+        if not isinstance(result, dict) or result.get("platform") != platform:
+            continue
+        urls = result.get("candidates", [])
+        for url in urls if isinstance(urls, list) else []:
+            url = val(url)
+            if url and good(platform, url):
+                candidates.append({
+                    "url": url,
+                    "title": "",
+                    "content": "",
+                    "search_provider": "Cloudflare Browser Search",
+                })
+                if len(candidates) >= MAX_ITEMS:
+                    break
+        if len(candidates) >= MAX_ITEMS:
+            break
+
+    print(
+        f"Cloudflare discovery fallback: platform={platform}; "
+        f"candidates={len(candidates)}; "
+        f"worker_actions={CLOUDFLARE_CALLS_THIS_RUN}/{MAX_CLOUDFLARE_CALLS_PER_RUN}"
+    )
+    return candidates
+
+
 def discover(p):
     """Return several ranked candidates across both targeted queries."""
     last_error = None
@@ -427,6 +481,29 @@ def discover(p):
             break
 
     ranked = sorted(ranked_by_url.values(), key=lambda item: item[0], reverse=True)
+
+    # The Worker has a real /search route, separate from its /collect profile
+    # route. Use it only when native discovery yields no relevant candidates.
+    # Candidate URLs from this fallback are not trusted as leads until profile
+    # enrichment and the strict China/manufacturer relevance check both pass.
+    if not ranked and CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+        fallback_query = NATIVE_QUERIES[p][0]
+        try:
+            fallback_results = cloudflare_search_candidates(p, fallback_query)
+            for item in fallback_results:
+                url = val(item.get("url"))
+                if url and good(p, url):
+                    ranked_by_url.setdefault(
+                        url,
+                        (1, url, fallback_query, "cloudflare_browser_search_fallback"),
+                    )
+            ranked = sorted(ranked_by_url.values(), key=lambda item: item[0], reverse=True)
+        except Exception as exc:
+            print(
+                f"Cloudflare discovery fallback failed: platform={p}; "
+                f"error={type(exc).__name__}: {exc}"
+            )
+
     # Gather a small candidate pool from each enabled platform. Final profile
     # validation remains strict; the main loop stops after five accepted leads.
     selected = ranked[:MAX_ITEMS]
