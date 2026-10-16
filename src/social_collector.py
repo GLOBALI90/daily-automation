@@ -148,7 +148,19 @@ def infer_social_industry(company, website, location, bio):
 def relevant_social_profile(platform, url, company, website, location, bio):
     """Accept only China-based industrial-lubricant manufacturers and producers."""
     text = " ".join([url, company, website, location, bio]).lower()
+    location_text = val(location).lower()
     if not company or company.lower() in {"unknown", "none", "n/a", "facebook", "linkedin"}:
+        return False
+    # An explicit non-China location overrides a Chinese keyword in a search URL
+    # or company slug (for example, /jiangsu-... whose profile says India).
+    non_china_locations = (
+        "india", "indian", "south korea", "korea", "japan", "united states",
+        "usa", "united kingdom", "england", "germany", "france", "italy",
+        "spain", "brazil", "indonesia", "thailand", "vietnam", "malaysia",
+        "singapore", "australia", "canada", "pakistan", "bangladesh",
+        "saudi arabia", "united arab emirates", "turkey", "mexico",
+    )
+    if any(signal in location_text for signal in non_china_locations):
         return False
     china_match = any(signal in text for signal in CHINA_SIGNALS) or domain(url).endswith(".cn")
     if not china_match:
