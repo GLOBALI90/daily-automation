@@ -446,7 +446,7 @@ def collect():
             product = infer_product(text)
             rows.append({
                 "company_name": title[:200], "website": link, "country": TARGET_COUNTRY, "industry": product,
-                "buyer_type": "Potential buyer / industrial consumer", "product_interest": product,
+                "buyer_type": "Industrial-lubricant manufacturer / producer", "product_interest": product,
                 "contact_person": "", "email": contacts["email"], "whatsapp": contacts["whatsapp"], "phone": contacts["phone"],
                 "linkedin": link if "linkedin.com" in link else "", "source": source, "evidence": snippet[:500],
                 "lead_score": "1" if contacts["email"] or contacts["phone"] or contacts["whatsapp"] else "0",
