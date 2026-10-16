@@ -676,6 +676,11 @@ def provider_chain(p, url):
                         f"Social provider response rejected as irrelevant: {name}; "
                         f"platform={p}; fields={json.dumps(extracted, ensure_ascii=False)}"
                     )
+                    # A provider has already returned enough profile data to
+                    # classify this URL as outside the pilot. Re-fetching the
+                    # same URL through the metered Worker cannot make it relevant.
+                    if name == "ScrapeCreators":
+                        return "", None, errors
                     continue
             except Exception as exc:
                 errors.append(f"{name}:normalization_error:{type(exc).__name__}")
