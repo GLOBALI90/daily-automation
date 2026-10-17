@@ -1,28 +1,28 @@
 {
-  "run_id": "39044492014",
-  "started_at_utc": "2026-10-17T15:19:12.890139+00:00",
-  "finished_at_utc": "2026-10-17T15:20:36.472850+00:00",
-  "outcome": "completed",
+  "run_id": "39046038188",
+  "started_at_utc": "2026-10-17T15:40:07.295424+00:00",
+  "finished_at_utc": "2026-10-17T15:40:21.746627+00:00",
+  "outcome": "no_new_candidates",
   "platforms": [
     "facebook",
     "linkedin"
   ],
   "max_valid_leads_per_run": 3,
   "minimum_seconds_between_profile_enrichment_requests": 15.0,
-  "discovered_candidates_total": 3,
+  "discovered_candidates_total": 0,
   "discovered_candidates_by_platform": {
     "facebook": 0,
-    "linkedin": 3
+    "linkedin": 0
   },
-  "new_qualified_leads_added": 1,
-  "existing_social_records_checked": 8,
+  "new_qualified_leads_added": 0,
+  "existing_social_records_checked": 9,
   "existing_personal_profiles_checked": 0,
   "duplicates_skipped_before_enrichment": 0,
   "cloudflare_primary_discovery": true,
   "provider_counts": {
-    "ScrapeCreators": 1,
+    "Apify": 0,
     "CloudflareDeepBackup": 0,
-    "failed": 2
+    "failed": 0
   },
   "cloudflare": {
     "token_configured": true,
@@ -31,46 +31,15 @@
     "requests": [
       {
         "route": "/search",
-        "platform": "both",
+        "platform": "facebook",
         "http_status": 200,
-        "elapsed_seconds": 0.42,
+        "elapsed_seconds": 0.27,
         "outcome": "success",
         "candidate_count": 0
       }
     ]
   },
-  "profile_fetch_results": [
-    {
-      "platform": "linkedin",
-      "profile_url": "https://linkedin.com/company/anhui-guanao-industry-co-ltd",
-      "outcome": "provider_failed",
-      "errors": [
-        "ScrapeCreators"
-      ]
-    },
-    {
-      "platform": "linkedin",
-      "profile_url": "https://cn.linkedin.com/company/fuchs-lubricants-china-ltd",
-      "outcome": "provider_failed",
-      "errors": [
-        "ScrapeCreators"
-      ]
-    },
-    {
-      "platform": "linkedin",
-      "profile_url": "https://cn.linkedin.com/company/frtlube-com",
-      "provider": "ScrapeCreators",
-      "fetch_status": "profile_fields_extracted",
-      "extracted_fields": [
-        "name",
-        "website",
-        "location_or_address",
-        "description_or_bio",
-        "followers"
-      ],
-      "outcome": "accepted_relevant"
-    }
-  ],
+  "profile_fetch_results": [],
   "personal_profiles_saved_this_run": 0,
   "notes": [
     "Public LinkedIn company pages, qualifying public LinkedIn personal profiles, and public Facebook pages only.",
