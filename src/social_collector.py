@@ -32,6 +32,16 @@ CLOUDFLARE_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_AUDIT = []
 COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
+FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "").strip()
+COLLECTION_MODE = os.getenv("COLLECTION_MODE", "social").strip().lower()
+PRODUCT_LEADS = DATA / "product_leads.csv"
+PRODUCT_LEAD_FIELDS = [
+    "company_name", "website", "country", "buyer_type", "product_interest",
+    "email", "phone", "source_url", "evidence", "verification_status",
+    "run_id", "collected_at"
+]
+FIRECRAWL_SEARCHES_THIS_RUN = 0
+MAX_FIRECRAWL_SEARCHES_PER_RUN = 1
 COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID = os.getenv("COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID", "").strip()
 COMPOSIO_USER_ID = os.getenv("COMPOSIO_USER_ID", "GLOBALI90").strip()
 CLOUDFLARE_PRIMARY_ENRICHMENT = os.getenv("CLOUDFLARE_PRIMARY_ENRICHMENT", "false").strip().lower() in ("1", "true", "yes", "on")
@@ -1743,7 +1753,130 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
     }, ensure_ascii=False), flush=True)
 
 
+
+def run_product_web_collection():
+    """Collect product-specific business prospects using one bounded Firecrawl search.
+
+    This mode intentionally does not scrape result pages yet: search-only costs
+    2 credits per 10 results, keeping the scheduled three-hour workflow within
+    a conservative free-tier budget. Contact fields are filled only when the
+    public search result itself contains them.
+    """
+    global FIRECRAWL_SEARCHES_THIS_RUN
+    if not FIRECRAWL_API_KEY:
+        raise RuntimeError("FIRECRAWL_API_KEY missing; product_web mode fails closed")
+
+    rows = []
+    if PRODUCT_LEADS.exists():
+        with PRODUCT_LEADS.open(encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    seen_domains = {
+        domain(val(row.get("website") or row.get("source_url")))
+        for row in rows if val(row.get("website") or row.get("source_url"))
+    }
+
+    if FIRECRAWL_SEARCHES_THIS_RUN >= MAX_FIRECRAWL_SEARCHES_PER_RUN:
+        print("FIRECRAWL_PRODUCT_SEARCH blocked: per_run_cap_reached")
+        return
+
+    query = (
+        f'"{PRODUCT_NAME}" {TARGET_MARKET} '
+        f'({BUYER_TYPES}) company manufacturer importer distributor official website contact email'
+    )
+    FIRECRAWL_SEARCHES_THIS_RUN += 1
+    response = session.post(
+        "https://api.firecrawl.dev/v2/search",
+        headers={
+            "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        json={"query": query, "limit": 10},
+        timeout=45,
+    )
+    if response.status_code == 402:
+        print("FIRECRAWL_PRODUCT_SEARCH stopped: credit_limit_reached_http_402; no retries")
+        return
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or payload.get("success") is False:
+        raise RuntimeError("Firecrawl product search returned an unsuccessful response")
+    items = payload.get("data") or payload.get("results") or []
+    if not isinstance(items, list):
+        items = []
+
+    email_re = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
+    phone_re = re.compile(r"(?<!\w)(?:\+?\d[\d ().-]{7,}\d)")
+    excluded_hosts = (
+        "facebook.com", "linkedin.com", "instagram.com", "tiktok.com",
+        "youtube.com", "x.com", "twitter.com", "wikipedia.org",
+        "crunchbase.com", "zoominfo.com", "apollo.io", "yellowpages.com",
+    )
+    added = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        url = val(item.get("url")).split("#", 1)[0].rstrip("/")
+        host = domain(url)
+        if not url.startswith(("https://", "http://")) or not host:
+            continue
+        if any(host == blocked or host.endswith("." + blocked) for blocked in excluded_hosts):
+            continue
+        blob = " ".join(val(item.get(k)) for k in ("title", "description", "markdown", "content"))
+        item_emails = sorted(set(email_re.findall(blob)))
+        item_phones = sorted(set(phone_re.findall(blob)))
+        website = f"{urlparse(url).scheme}://{host}"
+        if host in seen_domains:
+            continue
+        title = val(item.get("title"))
+        company = re.split(r"\s+[|–—-]\s+", title, maxsplit=1)[0].strip() or host
+        row = {
+            "company_name": company[:200],
+            "website": website,
+            "country": TARGET_MARKET,
+            "buyer_type": BUYER_TYPES,
+            "product_interest": PRODUCT_NAME,
+            "email": item_emails[0] if item_emails else "",
+            "phone": item_phones[0] if item_phones else "",
+            "source_url": url,
+            "evidence": blob[:2500],
+            "verification_status": "search_result_only_needs_review",
+            "run_id": RUN_ID,
+            "collected_at": datetime.now(timezone.utc).isoformat(),
+        }
+        rows.append(row)
+        seen_domains.add(host)
+        added += 1
+        if added >= MAX_ITEMS:
+            break
+
+    PRODUCT_LEADS.parent.mkdir(parents=True, exist_ok=True)
+    with PRODUCT_LEADS.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=PRODUCT_LEAD_FIELDS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+    print(
+        "FIRECRAWL_PRODUCT_RUN " + json.dumps({
+            "mode": "product_web",
+            "searches_used": FIRECRAWL_SEARCHES_THIS_RUN,
+            "per_run_search_cap": MAX_FIRECRAWL_SEARCHES_PER_RUN,
+            "search_result_count": len(items),
+            "new_company_candidates": added,
+            "total_saved_candidates": len(rows),
+            "credits_estimate_for_search": 2 if items or payload.get("success") else 0,
+            "scrape_calls": 0,
+            "outreach_sent": False,
+            "file": str(PRODUCT_LEADS.relative_to(ROOT)),
+        }, ensure_ascii=False),
+        flush=True,
+    )
+
+
 def main():
+    if COLLECTION_MODE == "product_web":
+        run_product_web_collection()
+        return
+
     # Always create the account-only CSV with a stable header, even when no
     # relevant personal profile is discovered in this run.
     if not PERSONAL_PROFILES.exists():
