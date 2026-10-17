@@ -251,6 +251,35 @@ class ProviderChainTests(unittest.TestCase):
             0,
         )
 
+    def test_facebook_uses_one_bounded_google_fallback_for_public_pages(self):
+        ad_library_empty = {"searchResults": []}
+        google_results = {
+            "results": [{
+                "url": "https://www.facebook.com/jiangsuindustriallubricants",
+                "title": "Jiangsu Industrial Lubricants Manufacturer",
+                "description": "Factory producing industrial lubricating oil in Jiangsu, China",
+            }]
+        }
+        with (
+            patch.object(social, "SCRAPECREATORS", "test-api-key"),
+            patch.object(social, "FACEBOOK_GOOGLE_SEARCH_USED_THIS_RUN", False),
+            patch.object(
+                social, "_scrapecreators_get",
+                side_effect=[ad_library_empty, google_results, ad_library_empty],
+            ) as mocked_get,
+        ):
+            first = social._facebook_native_candidates("industrial lubricant manufacturer")
+            second = social._facebook_native_candidates("industrial lubricant manufacturer")
+
+        self.assertEqual(len(first), 1)
+        self.assertIn("facebook.com", first[0]["url"])
+        self.assertGreater(
+            social.social_candidate_score("facebook", first[0], first[0]["url"]), 0
+        )
+        self.assertEqual(second, [])
+        paths = [call.args[0] for call in mocked_get.call_args_list]
+        self.assertEqual(paths.count("/v1/google/search"), 1)
+
     def test_discovery_rejects_candidates_without_china_evidence(self):
         candidate = {
             "title": "Example Industrial Lubricants Manufacturer",
