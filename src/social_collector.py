@@ -11,8 +11,12 @@ PERSONAL_PROFILES = DATA / "personal_profiles.csv"
 PERSONAL_PROFILE_FIELDS = ["platform", "public_name", "profile_url", "username", "run_id", "collected_at"]
 DATA.mkdir(exist_ok=True)
 
-# Pilot scope: Chinese industrial-lubricant manufacturers only.
-# Keep Worker enrichment to two calls per run, below its four-actions/day allowance.
+# Product-first lead discovery. Defaults preserve the existing lubricant/China pilot.
+PRODUCT_NAME = os.getenv("PRODUCT_NAME", "industrial lubricants").strip() or "industrial lubricants"
+TARGET_MARKET = os.getenv("TARGET_MARKET", "China").strip() or "China"
+BUYER_TYPES = os.getenv(
+    "BUYER_TYPES", "manufacturers, importers, distributors, industrial end-users"
+).strip() or "manufacturers, importers, distributors, industrial end-users"
 MAX_ITEMS = min(5, max(1, int(os.getenv("SOCIAL_MAX_ITEMS", "3") or "3")))
 REQUEST_INTERVAL_SECONDS = max(11.0, float(os.getenv("SOCIAL_REQUEST_INTERVAL_SECONDS", "15") or "15"))
 LAST_PROFILE_REQUEST_AT = 0.0
@@ -33,8 +37,8 @@ COMPOSIO_USER_ID = os.getenv("COMPOSIO_USER_ID", "GLOBALI90").strip()
 CLOUDFLARE_PRIMARY_ENRICHMENT = os.getenv("CLOUDFLARE_PRIMARY_ENRICHMENT", "false").strip().lower() in ("1", "true", "yes", "on")
 COMPOSIO_EXECUTE_URL = "https://backend.composio.dev/api/v3.1/tools/execute/FIRECRAWL_SEARCH"
 CLOUDFLARE_PRIMARY_QUERY = (
-    "China industrial lubricant manufacturer factory lubricating oil industrial grease "
-    "中国 工业润滑油 润滑脂 生产厂家"
+    f'"{PRODUCT_NAME}" {BUYER_TYPES} {TARGET_MARKET} company contact website '
+    f'"{PRODUCT_NAME}" {TARGET_MARKET} supplier importer distributor'
 )
 EXISTING_SOCIAL_KEYS = set()
 EXISTING_PERSONAL_KEYS = set()
@@ -165,6 +169,13 @@ INDUSTRY_TERMS = (
     "润滑油", "工业润滑油", "润滑脂", "工业润滑脂", "润滑剂",
     "润滑油厂家", "润滑油生产", "润滑油制造商", "润滑脂生产厂家"
 )
+# Keep the detailed legacy synonym set for the default pilot; arbitrary products
+# use their supplied phrase and meaningful tokens instead of lubricant-only gates.
+if PRODUCT_NAME.lower() in ("industrial lubricants", "industrial lubricant", "lubricating oil"):
+    PRODUCT_TERMS = INDUSTRY_TERMS
+else:
+    _product_tokens = [token for token in re.findall(r"[a-zA-Z0-9\u4e00-\u9fff]+", PRODUCT_NAME.lower()) if len(token) > 2]
+    PRODUCT_TERMS = tuple(dict.fromkeys([PRODUCT_NAME.lower(), *_product_tokens]))
 COMPANY_TERMS = (
     "company", "group", "limited", "ltd", "manufacturer", "manufacturing",
     "factory", "supplier", "production", "importer", "exporter", "refinery",
@@ -190,13 +201,26 @@ CHINA_SIGNALS = (
     "cangzhou", "dalian", "shenyang", "yingkou", "xiamen", "quanzhou",
     "fuzhou", "wuhan", "yichang"
 )
+MARKET_SIGNALS = (
+    CHINA_SIGNALS if TARGET_MARKET.lower() in ("china", "cn", "中国")
+    else tuple(dict.fromkeys(
+        [TARGET_MARKET.lower(), *[part for part in re.findall(r"[a-zA-Z0-9]+", TARGET_MARKET.lower()) if len(part) > 2]]
+    ))
+)
+BUYER_TYPE_TERMS = tuple(
+    dict.fromkeys(
+        [part.strip().lower() for part in re.split(r"[,;|]", BUYER_TYPES) if part.strip()]
+        + ["manufacturer", "manufacturing", "factory", "producer", "supplier", "importer", "distributor",
+           "wholesaler", "industrial end-user", "procurement", "purchasing", "采购", "生产厂家"]
+    )
+)
 PRIORITY_REGION_SIGNALS = ("jiangsu", "suzhou", "nanjing", "wuxi", "changzhou", "nantong")
 
 
 def infer_social_industry(company, website, location, bio):
     text = " ".join([company, website, location, bio]).lower()
-    if any(term in text for term in INDUSTRY_TERMS):
-        return "industrial lubricants"
+    if any(term in text for term in PRODUCT_TERMS):
+        return PRODUCT_NAME
     return ""
 
 
@@ -217,7 +241,7 @@ def relevant_social_profile(platform, url, company, website, location, bio):
     )
     if any(signal in location_text for signal in non_china_locations):
         return False
-    china_match = any(signal in text for signal in CHINA_SIGNALS) or domain(url).endswith(".cn")
+    china_match = any(signal in text for signal in MARKET_SIGNALS) or domain(url).endswith(".cn")
     if not china_match:
         return False
     lubricant_match = any(term in text for term in INDUSTRY_TERMS)
@@ -732,7 +756,7 @@ def personal_profile_candidate_score(result, url):
     ]).lower()
     if not any(term in role_text for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS):
         return 0
-    return 10 + sum(1 for term in CHINA_SIGNALS if term in text) + sum(
+    return 10 + sum(1 for term in MARKET_SIGNALS if term in text) + sum(
         1 for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS if term in role_text
     )
 
@@ -770,17 +794,13 @@ def social_candidate_score(platform, result, url):
     text = " ".join([title, snippet, url]).lower()
     if platform == "linkedin" and urlparse(url).path.lower().startswith("/in/"):
         return personal_profile_candidate_score(result, url)
-    lubricant_hits = sum(1 for term in INDUSTRY_TERMS if term in text)
-    producer_hits = sum(1 for term in (
-        "factory", "manufacturer", "manufacturing", "producer", "production",
-        "blending plant", "工厂", "生产厂家", "制造厂", "制造商", "生产企业", "调和厂"
-    ) if term in text)
-    china_hits = sum(1 for term in CHINA_SIGNALS if term in text)
-    # Strict pilot gate: require evidence of all three dimensions in the
-    # candidate itself; a search query alone is never evidence.
-    if not lubricant_hits or not producer_hits or not china_hits:
+    lubricant_hits = sum(1 for term in PRODUCT_TERMS if term in text)
+    buyer_hits = sum(1 for term in BUYER_TYPE_TERMS if term in text)
+    market_hits = sum(1 for term in MARKET_SIGNALS if term in text)
+    # Require product, buyer-type and target-market evidence in the candidate itself.
+    if not lubricant_hits or not buyer_hits or not market_hits:
         return 0
-    return lubricant_hits * 5 + producer_hits * 3 + china_hits * 2
+    return lubricant_hits * 5 + buyer_hits * 3 + market_hits * 2
 
 
 def pace_cloudflare_request():
@@ -966,8 +986,8 @@ def composio_search_candidates(platform, query):
 
     domain_filter = "linkedin.com/company" if platform == "linkedin" else "facebook.com"
     search_query = (
-        f'site:{domain_filter} ("industrial lubricant" OR "lubricating oil" OR '
-        f'"industrial grease" OR 润滑油 OR 润滑脂) China manufacturer factory'
+        f'site:{domain_filter} "{PRODUCT_NAME}" "{TARGET_MARKET}" '
+        f'({BUYER_TYPES}) company website contact'
     )
     # Resolve the actual REST connected-account ID and its owning user.
     # The MCP alias in GitHub Secrets is not necessarily the REST account ID.
