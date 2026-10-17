@@ -699,5 +699,46 @@ class ProviderChainTests(unittest.TestCase):
         mocked_post.assert_not_called()
 
 
+    def test_product_web_collection_uses_one_search_and_extracts_public_contacts(self):
+        import csv
+        import tempfile
+        class Response:
+            status_code = 200
+            def raise_for_status(self):
+                return None
+            def json(self):
+                return {"success": True, "data": [{
+                    "url": "https://example-manufacturer.cn/contact",
+                    "title": "Example Industrial Supplier | Contact",
+                    "description": "Industrial lubricants manufacturer. Contact sales@example-manufacturer.cn Tel +86 123 4567 8901",
+                }, {
+                    "url": "https://www.linkedin.com/company/not-an-official-site",
+                    "title": "Social profile",
+                    "description": "Should be filtered",
+                }]}
+        with tempfile.TemporaryDirectory() as tmp:
+            leads_path = Path(tmp) / "product_leads.csv"
+            with (
+                patch.object(social, "FIRECRAWL_API_KEY", "test-firecrawl-key"),
+                patch.object(social, "PRODUCT_LEADS", leads_path),
+                patch.object(social, "PRODUCT_NAME", "industrial lubricants"),
+                patch.object(social, "TARGET_MARKET", "China"),
+                patch.object(social, "BUYER_TYPES", "manufacturers, importers"),
+                patch.object(social, "MAX_ITEMS", 3),
+                patch.object(social, "FIRECRAWL_SEARCHES_THIS_RUN", 0),
+                patch.object(social.session, "post", return_value=Response()) as post,
+            ):
+                social.run_product_web_collection()
+            post.assert_called_once()
+            self.assertEqual(post.call_args.args[0], "https://api.firecrawl.dev/v2/search")
+            self.assertEqual(post.call_args.kwargs["json"]["limit"], 10)
+            with leads_path.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["email"], "sales@example-manufacturer.cn")
+            self.assertEqual(rows[0]["country"], "China")
+            self.assertEqual(rows[0]["verification_status"], "search_result_only_needs_review")
+
+
 if __name__ == "__main__":
     unittest.main()
