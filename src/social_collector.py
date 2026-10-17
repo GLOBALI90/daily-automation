@@ -877,6 +877,7 @@ def _resolve_composio_firecrawl_account():
     response = session.get(
         "https://backend.composio.dev/api/v3/connected_accounts",
         headers={"x-api-key": COMPOSIO_API_KEY, "Accept": "application/json"},
+        params={"toolkit_slugs": "firecrawl", "statuses": "ACTIVE", "account_type": "ALL", "limit": 100},
         timeout=20,
     )
     response.raise_for_status()
