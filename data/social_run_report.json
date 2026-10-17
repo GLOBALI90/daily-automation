@@ -1,22 +1,26 @@
 {
-  "run_id": "39019867512",
-  "started_at_utc": "2026-10-17T09:06:46.535321+00:00",
-  "finished_at_utc": "2026-10-17T09:07:50.654659+00:00",
-  "outcome": "completed",
+  "run_id": "39022962115",
+  "started_at_utc": "2026-10-17T09:55:55.199340+00:00",
+  "finished_at_utc": "2026-10-17T09:56:57.477744+00:00",
+  "outcome": "no_new_candidates",
   "platforms": [
     "facebook",
     "linkedin"
   ],
   "max_valid_leads_per_run": 3,
   "minimum_seconds_between_profile_enrichment_requests": 15.0,
-  "discovered_candidates_total": 1,
+  "discovered_candidates_total": 0,
   "discovered_candidates_by_platform": {
     "facebook": 0,
-    "linkedin": 1
+    "linkedin": 0
   },
   "new_qualified_leads_added": 0,
+  "existing_social_records_checked": 8,
+  "existing_personal_profiles_checked": 0,
+  "duplicates_skipped_before_enrichment": 0,
+  "cloudflare_primary_discovery": true,
   "provider_counts": {
-    "ScrapeCreators": 1,
+    "ScrapeCreators": 0,
     "CloudflareDeepBackup": 0,
     "failed": 0
   },
@@ -27,30 +31,15 @@
     "requests": [
       {
         "route": "/search",
-        "platform": "facebook",
+        "platform": "both",
         "http_status": 200,
-        "elapsed_seconds": 3.26,
+        "elapsed_seconds": 12.47,
         "outcome": "success",
         "candidate_count": 0
       }
     ]
   },
-  "profile_fetch_results": [
-    {
-      "platform": "linkedin",
-      "profile_url": "https://www.linkedin.com/company/xingang-lubrication",
-      "provider": "ScrapeCreators",
-      "fetch_status": "profile_fields_extracted",
-      "extracted_fields": [
-        "name",
-        "website",
-        "location_or_address",
-        "description_or_bio",
-        "followers"
-      ],
-      "outcome": "accepted_relevant"
-    }
-  ],
+  "profile_fetch_results": [],
   "personal_profiles_saved_this_run": 0,
   "notes": [
     "Public LinkedIn company pages, qualifying public LinkedIn personal profiles, and public Facebook pages only.",
