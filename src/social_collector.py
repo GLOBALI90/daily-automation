@@ -875,9 +875,14 @@ def _resolve_composio_firecrawl_account():
     if not COMPOSIO_API_KEY:
         raise RuntimeError("COMPOSIO_API_KEY missing")
     response = session.get(
-        "https://backend.composio.dev/api/v3/connected_accounts",
+        "https://backend.composio.dev/api/v3.1/connected_accounts",
         headers={"x-api-key": COMPOSIO_API_KEY, "Accept": "application/json"},
-        params={"toolkit_slugs": "firecrawl", "statuses": "ACTIVE", "account_type": "ALL", "limit": 100},
+        params=[
+            ("toolkit_slugs", "firecrawl"),
+            ("statuses", "ACTIVE"),
+            ("account_type", "ALL"),
+            ("limit", 100),
+        ],
         timeout=20,
     )
     response.raise_for_status()
