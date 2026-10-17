@@ -36,7 +36,6 @@ PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").strip().lower().lstrip(chr(92) +
 
 APIFY = os.getenv("APIFY_API_TOKEN", "").strip()
 SCRAPECREATORS = os.getenv("SCRAPECREATORS_API_KEY", "").strip()
-BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
 EXA_API_KEY = os.getenv("EXA_API_KEY", "").strip()
 EXA_USAGE_FILE = DATA / "exa_search_usage.json"
 EXA_MAX_MONTHLY_CALLS = 20
@@ -61,6 +60,7 @@ AUTO_PLATFORMS = ["facebook", "linkedin"]
 ACTORS = {
     "linkedin": "harvestapi~linkedin-profile-scraper",
     "linkedin_company": "harvestapi~linkedin-company",
+    "linkedin_search": "harvestapi~linkedin-company-search",
     "facebook": "apify~facebook-pages-scraper",
     "x": "apidojo~tweet-scraper",
 }
@@ -644,14 +644,65 @@ def _brave_search_candidates(platform, query):
     return out
 
 
+def _apify_linkedin_company_candidates(query):
+    """Search public LinkedIn company pages through Apify, with bounded cost."""
+    if not APIFY:
+        raise RuntimeError("APIFY_API_TOKEN missing for LinkedIn company search")
+    items = actor("linkedin_search", {
+        "searchQuery": query,
+        "maxItems": min(15, MAX_ITEMS * 3),
+        "takePages": 1,
+        "locations": ["China"],
+        "maxTotalChargeUsd": 0.10,
+    })
+    out = []
+    seen = set()
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        url = val(
+            item.get("linkedinUrl") or item.get("linkedin_url")
+            or item.get("companyUrl") or item.get("url")
+        ).split("?")[0].rstrip("/")
+        if not url or not good("linkedin", url):
+            continue
+        url = canonical_linkedin_url(url).rstrip("/")
+        if not urlparse(url).path.lower().startswith("/company/") or url in seen:
+            continue
+        seen.add(url)
+        title = val(item.get("name") or item.get("companyName") or item.get("title"))
+        content = " | ".join(val(v) for v in (
+            item.get("description"), item.get("industry"), item.get("location"),
+            item.get("headquarters"), item.get("website"), item.get("specialties")
+        ) if val(v))
+        result = {
+            "url": url,
+            "title": title,
+            "content": content,
+            "search_provider": "Apify LinkedIn Company Search",
+        }
+        LINKEDIN_SEARCH_RESULTS[url] = {
+            "title": title, "snippet": content, "search_provider": result["search_provider"]
+        }
+        out.append(result)
+    print(f"APIFY_LINKEDIN_SEARCH results={len(items) if isinstance(items, list) else 0}; public_company_candidates={len(out)}")
+    return out
+
+
 def native_candidates(platform, query):
     if platform == "facebook":
+        # Facebook discovery is handled by Cloudflare first and Exa as backup.
+        # ScrapeCreators is retained only as a legacy local/test adapter when configured.
+        if not SCRAPECREATORS:
+            return []
         return _facebook_native_candidates(query)
     if platform == "x":
         return _x_native_candidates(query)
     if platform == "linkedin":
-        # Public search-index results only; no LinkedIn login, session cookies,
-        # CAPTCHA bypass, or private/member-only data access.
+        # Apify is the active LinkedIn company discovery source. The old
+        # ScrapeCreators adapter is only used when no Apify token is configured.
+        if APIFY:
+            return _apify_linkedin_company_candidates(query)
         return _linkedin_provider_candidates(query)
     raise ValueError(f"Unsupported social platform: {platform}")
 
@@ -840,7 +891,7 @@ def discover(p):
     # top up a short result set, before the existing social-specific providers.
     # Exa is a card-free monthly-credit backup. Usage is committed with run data;
     # fail closed at 100 requests/month to keep the free allowance conservative.
-    if len(ranked_by_url) < MAX_ITEMS and EXA_API_KEY:
+    if len(ranked_by_url) < MAX_ITEMS and EXA_API_KEY and p == "facebook":
         try:
             backup_results = _exa_search_candidates(p, NATIVE_QUERIES[p][0])
             for item in backup_results:
@@ -861,30 +912,6 @@ def discover(p):
         except Exception as exc:
             print(
                 f"Exa Search backup failed: platform={p}; "
-                f"error={type(exc).__name__}: {exc}"
-            )
-
-    if len(ranked_by_url) < MAX_ITEMS and BRAVE_SEARCH_API_KEY:
-        try:
-            backup_results = _brave_search_candidates(p, NATIVE_QUERIES[p][0])
-            for item in backup_results:
-                u = val(item.get("url")).rstrip("/")
-                if not u or not good(p, u) or is_existing_candidate(p, u):
-                    continue
-                score = social_candidate_score(p, item, u)
-                if not score:
-                    print(
-                        f"Brave Search candidate rejected by strict qualification: "
-                        f"platform={p}; url={u}"
-                    )
-                    continue
-                candidate = (score, u, NATIVE_QUERIES[p][0], "brave_search_api_backup")
-                current = ranked_by_url.get(u)
-                if current is None or score > current[0]:
-                    ranked_by_url[u] = candidate
-        except Exception as exc:
-            print(
-                f"Brave Search backup failed: platform={p}; "
                 f"error={type(exc).__name__}: {exc}"
             )
 
@@ -933,7 +960,7 @@ def discover(p):
     # route. Use it only when native discovery yields no relevant candidates.
     # Candidate URLs from this fallback are not trusted as leads until profile
     # enrichment and the strict China/manufacturer relevance check both pass.
-    if len(ranked) < MAX_ITEMS and CLOUDFLARE_TOKEN and not CLOUDFLARE_SEARCH_USED_THIS_RUN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+    if len(ranked) < MAX_ITEMS and CLOUDFLARE_TOKEN and (p != "linkedin" or not APIFY) and not CLOUDFLARE_SEARCH_USED_THIS_RUN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
         fallback_query = NATIVE_QUERIES[p][0]
         try:
             fallback_results = cloudflare_search_candidates(p, fallback_query)
@@ -1115,13 +1142,17 @@ def pace_profile_enrichment(platform):
 def provider_chain(p, url):
     errors = []
 
-    # A non-empty HTTP response is not necessarily a successful profile fetch.
-    # Require a company/profile name plus at least one substantive profile field
-    # before accepting a provider; otherwise continue to the next adapter.
-    # ScrapeCreators is primary. Cloudflare Worker is the bounded fallback for
-    # either public LinkedIn or Facebook profiles/pages when its secret is configured.
-    providers = [("ScrapeCreators", lambda: scrapecreators_profile(p, url))]
-    if CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+    # Require usable public profile fields and strict target relevance.
+    # LinkedIn uses Apify directly; Cloudflare is reserved for Facebook.
+    # The legacy ScrapeCreators adapter remains inactive in the scheduled workflow.
+    if p == "linkedin" and APIFY:
+        providers = [("Apify", lambda: apify_profile(p, url))]
+    else:
+        providers = [("ScrapeCreators", lambda: scrapecreators_profile(p, url))]
+    if p == "facebook" and CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+        providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
+    elif p == "linkedin" and not APIFY and CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+        # Compatibility fallback for older runs without APIFY_API_TOKEN.
         providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
 
     for name, fn in providers:
@@ -1557,16 +1588,15 @@ def main():
         f"personal_profile_keys={len(EXISTING_PERSONAL_KEYS)}"
     )
 
-    # Cloudflare Browser Run is the primary search collector. One authenticated
-    # /search request covers both networks, using at most two daily browser
-    # actions. ScrapeCreators search is retained only to supplement results.
+    # Cloudflare is reserved for public Facebook discovery. LinkedIn company
+    # discovery runs through Apify; Exa is retained as a bounded Facebook backup.
     is_auto = PLATFORM not in PLATFORMS
     platforms_to_collect = AUTO_PLATFORMS if is_auto else [PLATFORM]
     CLOUDFLARE_PRIMARY_RESULTS["linkedin"] = []
     CLOUDFLARE_PRIMARY_RESULTS["facebook"] = []
-    if CLOUDFLARE_TOKEN:
+    if CLOUDFLARE_TOKEN and PLATFORM != "linkedin":
         try:
-            primary_platform = "both" if is_auto else PLATFORM
+            primary_platform = "facebook" if is_auto else PLATFORM
             primary_candidates = cloudflare_search_candidates(
                 primary_platform, CLOUDFLARE_PRIMARY_QUERY
             )
@@ -1643,6 +1673,7 @@ def main():
 
     added = 0
     provider_counts = {
+        "Apify": 0,
         "ScrapeCreators": 0,
         "CloudflareDeepBackup": 0,
         "failed": 0
@@ -1810,7 +1841,7 @@ def main():
     print(
         f"CLOUDFLARE_STATUS token_configured={bool(CLOUDFLARE_TOKEN)}; "
         f"calls={CLOUDFLARE_CALLS_THIS_RUN}/{MAX_CLOUDFLARE_CALLS_PER_RUN}; "
-        "supported_platforms=linkedin,facebook"
+        "supported_platforms=linkedin,facebook; cloudflare_scope=facebook_only_when_apify_configured"
     )
     print(
         f"Social collection: platforms={','.join(platforms_to_collect)}; "
