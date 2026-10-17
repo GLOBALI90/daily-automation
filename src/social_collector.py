@@ -29,6 +29,7 @@ COMPOSIO_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_AUDIT = []
 COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
 COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID = os.getenv("COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID", "").strip()
+COMPOSIO_USER_ID = os.getenv("COMPOSIO_USER_ID", "GLOBALI90").strip()
 CLOUDFLARE_PRIMARY_ENRICHMENT = os.getenv("CLOUDFLARE_PRIMARY_ENRICHMENT", "false").strip().lower() in ("1", "true", "yes", "on")
 COMPOSIO_EXECUTE_URL = "https://backend.composio.dev/api/v3.1/tools/execute/FIRECRAWL_SEARCH"
 CLOUDFLARE_PRIMARY_QUERY = (
@@ -881,7 +882,7 @@ def composio_search_candidates(platform, query):
         f'site:{domain_filter} ("industrial lubricant" OR "lubricating oil" OR '
         f'"industrial grease" OR 润滑油 OR 润滑脂) China manufacturer factory'
     )
-    body = {"arguments": {"q": search_query, "limit": min(10, max(3, MAX_ITEMS * 3)), "formats": ["markdown"]}}
+    body = {"user_id": COMPOSIO_USER_ID, "arguments": {"q": search_query, "limit": min(10, max(3, MAX_ITEMS * 3)), "formats": ["markdown"]}}
     if COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID:
         body["connected_account_id"] = COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID
 
