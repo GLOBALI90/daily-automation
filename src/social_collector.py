@@ -1300,10 +1300,76 @@ def main():
         with PERSONAL_PROFILES.open("w", encoding="utf-8", newline="") as handle:
             csv.DictWriter(handle, fieldnames=PERSONAL_PROFILE_FIELDS).writeheader()
 
-    # Auto mode actively searches both allowed networks on every run.
-    # Manual mode still restricts collection to the explicitly selected network.
+    # Read durable state BEFORE discovery on every run. Known company pages and
+    # previously saved personal accounts are excluded before profile enrichment.
+    rows = []
+    fields = []
+    if LEADS.exists():
+        with LEADS.open(encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+            fields = list(rows[0].keys()) if rows else []
+    for field in FIELDS:
+        if field not in fields:
+            fields.append(field)
+
+    EXISTING_SOCIAL_KEYS.clear()
+    for stored in rows:
+        platform = val(stored.get("platform")).lower()
+        if platform not in PLATFORMS:
+            continue
+        for field in ("social_url", "discovered_url", "linkedin"):
+            url = val(stored.get(field))
+            if url and good(platform, url):
+                EXISTING_SOCIAL_KEYS.add((platform, canonical_social_key(platform, url)))
+
+    EXISTING_PERSONAL_KEYS.clear()
+    if PERSONAL_PROFILES.exists():
+        with PERSONAL_PROFILES.open(encoding="utf-8", newline="") as handle:
+            for stored in csv.DictReader(handle):
+                url = val(stored.get("profile_url"))
+                if url:
+                    EXISTING_PERSONAL_KEYS.add(canonical_social_key(
+                        val(stored.get("platform")).lower(), url
+                    ))
+
+    print(
+        f"EXISTING_STATE_LOADED company_social_keys={len(EXISTING_SOCIAL_KEYS)}; "
+        f"personal_profile_keys={len(EXISTING_PERSONAL_KEYS)}"
+    )
+
+    # Cloudflare Browser Run is the primary search collector. One authenticated
+    # /search request covers both networks, using at most two daily browser
+    # actions. ScrapeCreators search is retained only to supplement results.
     is_auto = PLATFORM not in PLATFORMS
     platforms_to_collect = AUTO_PLATFORMS if is_auto else [PLATFORM]
+    CLOUDFLARE_PRIMARY_RESULTS["linkedin"] = []
+    CLOUDFLARE_PRIMARY_RESULTS["facebook"] = []
+    if CLOUDFLARE_TOKEN:
+        try:
+            primary_platform = "both" if is_auto else PLATFORM
+            primary_candidates = cloudflare_search_candidates(
+                primary_platform, CLOUDFLARE_PRIMARY_QUERY
+            )
+            for candidate in primary_candidates:
+                candidate_platform = val(candidate.get("platform")).lower()
+                if candidate_platform in CLOUDFLARE_PRIMARY_RESULTS:
+                    CLOUDFLARE_PRIMARY_RESULTS[candidate_platform].append(candidate)
+            print(
+                "CLOUDFLARE_PRIMARY_DISCOVERY "
+                + json.dumps({
+                    "requested_platform": primary_platform,
+                    "linkedin_candidates": len(CLOUDFLARE_PRIMARY_RESULTS["linkedin"]),
+                    "facebook_candidates": len(CLOUDFLARE_PRIMARY_RESULTS["facebook"]),
+                    "known_company_urls_loaded": len(EXISTING_SOCIAL_KEYS),
+                    "known_personal_urls_loaded": len(EXISTING_PERSONAL_KEYS),
+                }, ensure_ascii=False)
+            )
+        except Exception as exc:
+            print(
+                f"Cloudflare primary discovery failed; using bounded native-search fallback: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
     found = []
     for target_platform in platforms_to_collect:
         platform_candidates = discover(target_platform)
@@ -1312,29 +1378,21 @@ def main():
                      for url, query, method in platform_candidates)
         print(
             f"SOCIAL_DISCOVERY_SUMMARY platform={target_platform}; "
-            f"candidates={len(platform_candidates)}"
+            f"new_candidates_after_dedupe={len(platform_candidates)}"
         )
 
     if not found:
-        print("No Facebook or LinkedIn candidates found")
-        write_run_report(platforms_to_collect, 0, 0, {"ScrapeCreators": 0, "CloudflareDeepBackup": 0, "failed": 0}, "no_candidates")
+        print("No new Facebook or LinkedIn candidates found after checking stored records")
+        write_run_report(
+            platforms_to_collect, 0, 0,
+            {"ScrapeCreators": 0, "CloudflareDeepBackup": 0, "failed": 0},
+            "no_new_candidates"
+        )
         print(
             f"PERSONAL_PROFILE_SUMMARY discovered=0; new_account_only_records=0; "
             f"file={PERSONAL_PROFILES.relative_to(ROOT)}; contact_details_saved=false"
         )
         return
-
-    rows = []
-    fields = []
-
-    if LEADS.exists():
-        with LEADS.open(encoding="utf-8", newline="") as f:
-            rows = list(csv.DictReader(f))
-            fields = list(rows[0].keys()) if rows else []
-
-    for f in FIELDS:
-        if f not in fields:
-            fields.append(f)
 
     # Backfill contact fields from already-stored public bios too. This matters
     # when a profile was collected before the extractor existed and is now deduped.
