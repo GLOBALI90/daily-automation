@@ -1765,7 +1765,7 @@ def run_product_web_collection():
     a conservative free-tier budget. Contact fields are filled only when the
     public search result itself contains them.
     """
-    global FIRECRAWL_SEARCHES_THIS_RUN
+    global FIRECRAWL_SEARCHES_THIS_RUN, FIRECRAWL_SCRAPES_THIS_RUN
     if not FIRECRAWL_API_KEY:
         raise RuntimeError("FIRECRAWL_API_KEY missing; product_web mode fails closed")
 
