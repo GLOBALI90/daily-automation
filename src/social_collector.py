@@ -38,7 +38,8 @@ PRODUCT_LEADS = DATA / "product_leads.csv"
 PRODUCT_LEAD_FIELDS = [
     "company_name", "website", "country", "buyer_type", "product_interest",
     "email", "phone", "source_url", "evidence", "verification_status",
-    "run_id", "collected_at"
+    "ai_customer_fit", "ai_confidence", "ai_recommended_buyer_type",
+    "ai_reason", "ai_review_status", "run_id", "collected_at"
 ]
 FIRECRAWL_SEARCHES_THIS_RUN = 0
 MAX_FIRECRAWL_SEARCHES_PER_RUN = 1
@@ -1757,6 +1758,74 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
 
 
 
+def qualify_product_lead_with_ai(row):
+    """Use the already-configured Gemini integration to assess B2B customer fit.
+
+    This only classifies public evidence; it never contacts a prospect or invents
+    missing facts. A failed/missing AI provider leaves the lead pending review.
+    """
+    key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not key:
+        print("GEMINI_PRODUCT_QUALIFICATION skipped: GEMINI_API_KEY missing")
+        return {
+            "ai_customer_fit": "unknown",
+            "ai_confidence": "0",
+            "ai_recommended_buyer_type": "",
+            "ai_reason": "AI key not configured; manual review required",
+            "ai_review_status": "pending_manual_review",
+        }
+    try:
+        from gemini_utils import generate_text
+        prompt = f"""You qualify potential B2B customers for an international trade company.
+Assess whether this organization is plausibly a real business customer for the specified product in the specified market.
+Do not assume that a supplier/manufacturer is a buyer; distinguish likely buyers, distributors/importers, manufacturers who may consume the product, and irrelevant organizations.
+Use only the evidence below. If evidence is thin or only a search snippet, say so. Never invent contact details or company facts.
+Target product: {row.get('product_interest', '')}
+Target country/market: {row.get('country', '')}
+Buyer types of interest: {row.get('buyer_type', '')}
+Company/result title: {row.get('company_name', '')}
+Website: {row.get('website', '')}
+Source URL: {row.get('source_url', '')}
+Public evidence: {row.get('evidence', '')[:2200]}
+
+Return ONLY valid JSON with these keys:
+{{"fit":"likely_customer|possible_customer|supplier_only|irrelevant|uncertain","confidence":0,"recommended_buyer_type":"short label or empty","reason":"one concise evidence-based sentence","needs_manual_review":true}}
+Confidence must be an integer from 0 to 100. Set needs_manual_review true whenever evidence is incomplete.
+"""
+        model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
+        raw = generate_text(prompt, api_key=key, model=model)
+        match = re.search(r"\{[\s\S]*\}", raw or "")
+        if not match:
+            raise ValueError("Gemini response was not JSON")
+        result = json.loads(match.group(0))
+        allowed = {"likely_customer", "possible_customer", "supplier_only", "irrelevant", "uncertain"}
+        fit = val(result.get("fit")).lower()
+        if fit not in allowed:
+            fit = "uncertain"
+        try:
+            confidence = max(0, min(100, int(result.get("confidence", 0))))
+        except (TypeError, ValueError):
+            confidence = 0
+        reason = val(result.get("reason"))[:500]
+        review = bool(result.get("needs_manual_review", True)) or confidence < 75 or fit in {"uncertain", "possible_customer"}
+        return {
+            "ai_customer_fit": fit,
+            "ai_confidence": str(confidence),
+            "ai_recommended_buyer_type": val(result.get("recommended_buyer_type"))[:120],
+            "ai_reason": reason or "AI provided no explanation; manual review required",
+            "ai_review_status": "pending_manual_review" if review else "ai_screened_review_before_outreach",
+        }
+    except Exception as exc:
+        print(f"GEMINI_PRODUCT_QUALIFICATION failed safely: {type(exc).__name__}")
+        return {
+            "ai_customer_fit": "unknown",
+            "ai_confidence": "0",
+            "ai_recommended_buyer_type": "",
+            "ai_reason": "AI qualification failed; manual review required",
+            "ai_review_status": "pending_manual_review",
+        }
+
+
 def run_product_web_collection():
     """Collect product-specific business prospects using one bounded Firecrawl search.
 
@@ -1904,9 +1973,15 @@ def run_product_web_collection():
             "source_url": url,
             "evidence": blob[:2500],
             "verification_status": "official_domain_scraped_needs_review" if scrape_succeeded else "search_result_only_needs_review",
+            "ai_customer_fit": "unknown",
+            "ai_confidence": "0",
+            "ai_recommended_buyer_type": "",
+            "ai_reason": "",
+            "ai_review_status": "pending_manual_review",
             "run_id": RUN_ID,
             "collected_at": datetime.now(timezone.utc).isoformat(),
         }
+        row.update(qualify_product_lead_with_ai(row))
         rows.append(row)
         seen_domains.add(host)
         added += 1
