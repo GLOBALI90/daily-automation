@@ -741,5 +741,26 @@ class ProviderChainTests(unittest.TestCase):
             self.assertEqual(rows[0]["verification_status"], "search_result_only_needs_review")
 
 
+    def test_gemini_classifies_product_lead_without_sending_outreach(self):
+        with (
+            patch.dict("os.environ", {"GEMINI_API_KEY": "test-gemini-key", "GEMINI_MODEL": "test-model"}),
+            patch.object(gemini_utils, "generate_text", return_value='{"fit":"likely_customer","confidence":91,"recommended_buyer_type":"industrial end-user","reason":"The evidence identifies an industrial manufacturer with a stated need for the target product.","needs_manual_review":false}') as generate,
+        ):
+            result = social.qualify_product_lead_with_ai({
+                "company_name": "Example Factory",
+                "website": "https://example.com",
+                "country": "Turkey",
+                "buyer_type": "importers, industrial end-users",
+                "product_interest": "titanium dioxide",
+                "source_url": "https://example.com/about",
+                "evidence": "Industrial manufacturer using titanium dioxide in production",
+            })
+        self.assertEqual(result["ai_customer_fit"], "likely_customer")
+        self.assertEqual(result["ai_confidence"], "91")
+        self.assertEqual(result["ai_review_status"], "ai_screened_review_before_outreach")
+        generate.assert_called_once()
+        self.assertEqual(generate.call_args.kwargs["model"], "test-model")
+
+
 if __name__ == "__main__":
     unittest.main()
