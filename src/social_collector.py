@@ -36,6 +36,8 @@ PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").strip().lower().lstrip(chr(92) +
 
 APIFY = os.getenv("APIFY_API_TOKEN", "").strip()
 SCRAPECREATORS = os.getenv("SCRAPECREATORS_API_KEY", "").strip()
+# Legacy Brave adapter is disabled in the workflow; kept only for compatibility tests.
+BRAVE_SEARCH_API_KEY = ""
 EXA_API_KEY = os.getenv("EXA_API_KEY", "").strip()
 EXA_USAGE_FILE = DATA / "exa_search_usage.json"
 EXA_MAX_MONTHLY_CALLS = 20
