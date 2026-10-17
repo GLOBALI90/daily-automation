@@ -178,6 +178,15 @@ def send_email(to, content, attempts=1):
 
 
 
+def verified_whatsapp_number(row):
+    """Return only a number explicitly classified as public WhatsApp contact.
+
+    A generic public phone number is not proof that the number accepts WhatsApp
+    messages, so never promote the phone field into an outbound WhatsApp target.
+    """
+    return (row.get("whatsapp") or "").strip()
+
+
 def make_whatsapp_message(row):
     prompt = f"""Write one concise first-contact WhatsApp message for a B2B trade prospect on behalf of {COMPANY['brand']}.
 We work in international sourcing/trade in petroleum products, chemicals, petrochemicals, steel and renewable energy.
@@ -394,7 +403,7 @@ def main():
             print(f"OUTREACH_LEAD_DONE company={company_label[:100]} email_status=ai_failed whatsapp_status=not_attempted", flush=True)
             continue
         status = send_email(row.get("email", ""), message) if row.get("email") else "no_public_email"
-        wa_number = (row.get("whatsapp") or row.get("phone") or "").strip()
+        wa_number = verified_whatsapp_number(row)
         wa_message = make_whatsapp_message(row) if wa_number else ""
         if wa_number and wa_message:
             wa_status = send_whatsapp(wa_number, wa_message)
