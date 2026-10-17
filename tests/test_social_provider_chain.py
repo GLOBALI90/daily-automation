@@ -47,6 +47,60 @@ class ProviderChainTests(unittest.TestCase):
         self.assertEqual(body["connected_account_id"], "ca_test-firecrawl")
         self.assertEqual(body["arguments"]["q"].startswith("site:linkedin.com/company"), True)
 
+    def test_product_first_query_uses_configured_product_market_and_buyers(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def __init__(self, payload):
+                self.payload = payload
+
+            def json(self):
+                return self.payload
+
+            def raise_for_status(self):
+                return None
+
+        account_response = Response({"items": [{
+            "id": "ca_test-firecrawl",
+            "status": "ACTIVE",
+            "toolkit": {"slug": "firecrawl"},
+            "user_id": "composio-owner-123",
+        }]})
+        execute_response = Response({"successful": True, "data": {"results": []}})
+        with (
+            patch.object(social, "COMPOSIO_API_KEY", "test-composio-key"),
+            patch.object(social, "COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID", "firecrawl_test-alias"),
+            patch.object(social, "COMPOSIO_USER_ID", "GLOBALI90"),
+            patch.object(social, "PRODUCT_NAME", "titanium dioxide"),
+            patch.object(social, "TARGET_MARKET", "Turkey"),
+            patch.object(social, "BUYER_TYPES", "importers, distributors"),
+            patch.object(social.session, "get", return_value=account_response),
+            patch.object(social.session, "post", return_value=execute_response) as post,
+        ):
+            social.composio_search_candidates("linkedin", "unused")
+
+        query = post.call_args.kwargs["json"]["arguments"]["q"]
+        self.assertIn("titanium dioxide", query)
+        self.assertIn("Turkey", query)
+        self.assertIn("importers, distributors", query)
+
+    def test_dynamic_product_and_market_relevance(self):
+        with (
+            patch.object(social, "PRODUCT_TERMS", ("titanium dioxide", "titanium")),
+            patch.object(social, "MARKET_SIGNALS", ("turkey",)),
+            patch.object(social, "BUYER_TYPE_TERMS", ("importer", "distributor")),
+            patch.object(social, "TARGET_MARKET", "Turkey"),
+        ):
+            self.assertTrue(social.relevant_social_profile(
+                "linkedin",
+                "https://www.linkedin.com/company/example",
+                "Example Titanium Dioxide Importer",
+                "https://example.com",
+                "Istanbul, Turkey",
+                "Importer and distributor of titanium dioxide",
+            ))
+
     def test_facebook_profile_enrichment_uses_cloudflare_only(self):
         valid_profile = (
             "Example Industrial Lubricants Company",
