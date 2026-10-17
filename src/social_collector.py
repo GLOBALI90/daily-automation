@@ -24,6 +24,14 @@ MAX_CLOUDFLARE_CALLS_PER_RUN = 2
 CLOUDFLARE_AUDIT = []
 PROFILE_AUDIT = []
 DISCOVERY_COUNTS = {}
+CLOUDFLARE_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
+CLOUDFLARE_PRIMARY_QUERY = (
+    "China industrial lubricant manufacturer factory lubricating oil industrial grease "
+    "中国 工业润滑油 润滑脂 生产厂家"
+)
+EXISTING_SOCIAL_KEYS = set()
+EXISTING_PERSONAL_KEYS = set()
+DUPLICATE_PREFILTER_SKIPPED = 0
 PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").strip().lower().lstrip(chr(92) + "/")
 
 APIFY = os.getenv("APIFY_API_TOKEN", "").strip()
@@ -104,6 +112,22 @@ def canonical_linkedin_url(url):
         path = parsed.path.rstrip("/")
         return f"https://www.linkedin.com{path}/" if path else "https://www.linkedin.com/"
     return val(url)
+
+
+def canonical_social_key(platform, url):
+    value = val(url).split("#", 1)[0].rstrip("/")
+    if platform == "linkedin" and value:
+        value = canonical_linkedin_url(value).rstrip("/")
+    return value
+
+
+def is_existing_candidate(platform, url):
+    key = canonical_social_key(platform, url)
+    if not key:
+        return False
+    if platform == "linkedin" and urlparse(key).path.lower().startswith("/in/"):
+        return key in EXISTING_PERSONAL_KEYS
+    return (platform, key) in EXISTING_SOCIAL_KEYS
 
 
 def good(p, u):
@@ -584,22 +608,30 @@ def cloudflare_search_candidates(platform, query):
     payload = response.json()
     results = payload.get("results", []) if isinstance(payload, dict) else []
     candidates = []
+    per_platform_counts = {"linkedin": 0, "facebook": 0}
     for result in results if isinstance(results, list) else []:
-        if not isinstance(result, dict) or result.get("platform") != platform:
+        if not isinstance(result, dict):
+            continue
+        result_platform = val(result.get("platform")).lower()
+        if result_platform not in PLATFORMS:
+            continue
+        if platform != "both" and result_platform != platform:
             continue
         urls = result.get("candidates", [])
         for url in urls if isinstance(urls, list) else []:
+            if per_platform_counts[result_platform] >= MAX_ITEMS:
+                break
             url = val(url)
-            if url and good(platform, url):
+            if url and good(result_platform, url):
                 candidates.append({
                     "url": url,
                     "title": "",
                     "content": "",
                     "search_provider": "Cloudflare Browser Search",
+                    "platform": result_platform,
                 })
-                if len(candidates) >= MAX_ITEMS:
-                    break
-        if len(candidates) >= MAX_ITEMS:
+                per_platform_counts[result_platform] += 1
+        if platform != "both" and per_platform_counts[result_platform] >= MAX_ITEMS:
             break
 
     CLOUDFLARE_AUDIT.append({
