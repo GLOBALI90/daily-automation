@@ -1779,15 +1779,9 @@ def run_product_web_collection():
         print("FIRECRAWL_PRODUCT_SEARCH blocked: per_run_cap_reached")
         return
 
-    # Keep search wording broad: quoted multi-word products plus a comma-list
-    # of buyer types can cause zero-result responses from some search backends.
-    buyer_query_terms = " ".join(
-        part.strip() for part in re.split(r"[,;|]", BUYER_TYPES) if part.strip()
-    )
-    query = (
-        f'{PRODUCT_NAME} {TARGET_MARKET} {buyer_query_terms} '
-        f'manufacturer importer distributor official company website contact'
-    )
+    # Use one compact query; search backends can return zero results when
+    # product, market, buyer types and contact qualifiers are all combined.
+    query = f'{PRODUCT_NAME} manufacturers companies in {TARGET_MARKET}'
     FIRECRAWL_SEARCHES_THIS_RUN += 1
     response = session.post(
         "https://api.firecrawl.dev/v2/search",
@@ -1866,6 +1860,8 @@ def run_product_web_collection():
             "searches_used": FIRECRAWL_SEARCHES_THIS_RUN,
             "per_run_search_cap": MAX_FIRECRAWL_SEARCHES_PER_RUN,
             "search_result_count": len(items),
+            "response_keys": sorted(payload.keys()),
+            "result_payload_type": type(payload.get("data")).__name__,
             "new_company_candidates": added,
             "total_saved_candidates": len(rows),
             "credits_estimate_for_search": 2 if items or payload.get("success") else 0,
