@@ -9,26 +9,42 @@ import gemini_utils
 
 
 class ProviderChainTests(unittest.TestCase):
-    def test_composio_search_uses_configured_user_and_connected_account(self):
+    def test_composio_search_resolves_rest_account_and_owner(self):
         class Response:
             status_code = 200
             text = ""
 
+            def __init__(self, payload):
+                self.payload = payload
+
             def json(self):
-                return {"successful": True, "data": {"results": []}}
+                return self.payload
+
+            def raise_for_status(self):
+                return None
+
+        account_response = Response({"items": [{
+            "id": "ca_test-firecrawl",
+            "status": "ACTIVE",
+            "toolkit": {"slug": "firecrawl"},
+            "user_id": "composio-owner-123",
+            "is_default": True,
+        }]})
+        execute_response = Response({"successful": True, "data": {"results": []}})
 
         with (
             patch.object(social, "COMPOSIO_API_KEY", "test-composio-key"),
-            patch.object(social, "COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID", "firecrawl_test-account"),
+            patch.object(social, "COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID", "firecrawl_test-alias"),
             patch.object(social, "COMPOSIO_USER_ID", "GLOBALI90"),
-            patch.object(social.session, "post", return_value=Response()) as post,
+            patch.object(social.session, "get", return_value=account_response),
+            patch.object(social.session, "post", return_value=execute_response) as post,
         ):
             result = social.composio_search_candidates("linkedin", "test query")
 
         self.assertEqual(result, [])
         body = post.call_args.kwargs["json"]
-        self.assertEqual(body["user_id"], "GLOBALI90")
-        self.assertEqual(body["connected_account_id"], "firecrawl_test-account")
+        self.assertEqual(body["user_id"], "composio-owner-123")
+        self.assertEqual(body["connected_account_id"], "ca_test-firecrawl")
         self.assertEqual(body["arguments"]["q"].startswith("site:linkedin.com/company"), True)
 
     def test_facebook_profile_enrichment_uses_cloudflare_only(self):
