@@ -1144,18 +1144,20 @@ def pace_profile_enrichment(platform):
 def provider_chain(p, url):
     errors = []
 
-    # Require usable public profile fields and strict target relevance.
-    # LinkedIn uses Apify directly; Cloudflare is reserved for Facebook.
-    # The legacy ScrapeCreators adapter remains inactive in the scheduled workflow.
-    if p == "linkedin" and APIFY:
+    # Active production routes are deliberately separated by network:
+    # Apify handles LinkedIn company pages; Cloudflare handles Facebook pages.
+    if p == "linkedin":
+        if not APIFY:
+            return "", None, ["Apify:APIFY_API_TOKEN missing"]
         providers = [("Apify", lambda: apify_profile(p, url))]
+    elif p == "facebook":
+        if not CLOUDFLARE_TOKEN:
+            return "", None, ["CloudflareDeepBackup:SOCIAL_DEEP_BACKUP_TOKEN missing"]
+        if CLOUDFLARE_CALLS_THIS_RUN >= MAX_CLOUDFLARE_CALLS_PER_RUN:
+            return "", None, ["CloudflareDeepBackup:cloudflare_per_run_cap_reached"]
+        providers = [("CloudflareDeepBackup", lambda: cloudflare_profile(p, url))]
     else:
-        providers = [("ScrapeCreators", lambda: scrapecreators_profile(p, url))]
-    if p == "facebook" and CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
-        providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
-    elif p == "linkedin" and not APIFY and CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
-        # Compatibility fallback for older runs without APIFY_API_TOKEN.
-        providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
+        return "", None, [f"unsupported_platform:{p}"]
 
     for name, fn in providers:
         try:
