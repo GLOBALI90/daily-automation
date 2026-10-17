@@ -25,6 +25,12 @@ CLOUDFLARE_AUDIT = []
 PROFILE_AUDIT = []
 DISCOVERY_COUNTS = {}
 CLOUDFLARE_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
+COMPOSIO_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
+COMPOSIO_AUDIT = []
+COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
+COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID = os.getenv("COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID", "").strip()
+CLOUDFLARE_PRIMARY_ENRICHMENT = os.getenv("CLOUDFLARE_PRIMARY_ENRICHMENT", "false").strip().lower() in ("1", "true", "yes", "on")
+COMPOSIO_EXECUTE_URL = "https://backend.composio.dev/api/v3.1/tools/execute/FIRECRAWL_SEARCH"
 CLOUDFLARE_PRIMARY_QUERY = (
     "China industrial lubricant manufacturer factory lubricating oil industrial grease "
     "中国 工业润滑油 润滑脂 生产厂家"
@@ -863,15 +869,95 @@ def cloudflare_search_candidates(platform, query):
     return candidates
 
 
+def composio_search_candidates(platform, query):
+    """Primary discovery via Composio's Firecrawl Search tool."""
+    if not COMPOSIO_API_KEY:
+        raise RuntimeError("COMPOSIO_API_KEY missing")
+    if platform not in ("linkedin", "facebook"):
+        return []
+
+    domain_filter = "linkedin.com/company" if platform == "linkedin" else "facebook.com"
+    search_query = (
+        f'site:{domain_filter} ("industrial lubricant" OR "lubricating oil" OR '
+        f'"industrial grease" OR 润滑油 OR 润滑脂) China manufacturer factory'
+    )
+    body = {"arguments": {"q": search_query, "limit": min(10, max(3, MAX_ITEMS * 3)), "formats": ["markdown"]}}
+    if COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID:
+        body["connected_account_id"] = COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID
+
+    started = time.monotonic()
+    response = session.post(
+        COMPOSIO_EXECUTE_URL,
+        headers={"x-api-key": COMPOSIO_API_KEY, "Accept": "application/json", "Content-Type": "application/json"},
+        json=body,
+        timeout=75,
+    )
+    if response.status_code >= 400:
+        COMPOSIO_AUDIT.append({"platform": platform, "http_status": response.status_code, "outcome": "http_error"})
+        raise RuntimeError(f"composio_firecrawl_http_{response.status_code}:{response.text[:250]}")
+    payload = response.json()
+    if isinstance(payload, dict) and (payload.get("successful") is False or payload.get("error")):
+        raise RuntimeError("composio_firecrawl_tool_error:" + val(payload.get("error") or payload.get("message"))[:250])
+
+    candidates, seen = [], set()
+    def visit(node):
+        if isinstance(node, dict):
+            url = val(node.get("url") or node.get("link") or node.get("sourceURL"))
+            title = val(node.get("title") or node.get("name"))
+            content = val(node.get("markdown") or node.get("description") or node.get("snippet") or node.get("content") or node.get("text"))
+            if url.startswith(("https://", "http://")) and url not in seen and good(platform, url):
+                path = urlparse(url).path.lower()
+                if platform != "linkedin" or path.startswith("/company/"):
+                    if platform != "facebook" or not any(part in path for part in ("/posts/", "/photos/", "/videos/", "/reel/", "/watch", "/groups/", "/events/", "/marketplace/", "/login")):
+                        seen.add(url)
+                        candidates.append({
+                            "url": url.split("#", 1)[0].rstrip("/"),
+                            "title": title,
+                            "content": content[:5000],
+                            "search_provider": "Composio Firecrawl Search",
+                            "platform": platform,
+                        })
+            for value in node.values():
+                if isinstance(value, (dict, list)):
+                    visit(value)
+        elif isinstance(node, list):
+            for value in node:
+                visit(value)
+
+    visit(payload)
+    COMPOSIO_AUDIT.append({
+        "platform": platform, "http_status": response.status_code,
+        "elapsed_seconds": round(time.monotonic() - started, 2),
+        "outcome": "success", "candidate_count": len(candidates),
+    })
+    print(
+        f"COMPOSIO_FIRECRAWL_PRIMARY platform={platform}; http_status={response.status_code}; "
+        f"candidates={len(candidates)}; elapsed_seconds={COMPOSIO_AUDIT[-1]['elapsed_seconds']}"
+    )
+    return candidates
+
+
 def discover(p):
-    """Use Cloudflare public search first, then supplement with native search."""
+    """Use Composio Firecrawl first, then bounded backup providers."""
     global DUPLICATE_PREFILTER_SKIPPED
     last_error = None
     ranked_by_url = {}
     personal_by_url = {}
 
-    # Cloudflare is the primary discovery source. Candidate URLs are provisional
-    # until profile enrichment confirms the China/manufacturer requirements.
+    # Composio candidates have first priority; Cloudflare search results remain a backup.
+    for item in COMPOSIO_PRIMARY_RESULTS.get(p, []):
+        u = val(item.get("url")).rstrip("/")
+        if not u or not good(p, u):
+            continue
+        if is_existing_candidate(p, u):
+            DUPLICATE_PREFILTER_SKIPPED += 1
+            print(f"Skipping previously stored Composio candidate before enrichment: platform={p}; url={u}")
+            continue
+        is_personal = p == "linkedin" and urlparse(u).path.lower().startswith("/in/")
+        target = personal_by_url if is_personal else ranked_by_url
+        target[u] = (1000, u, CLOUDFLARE_PRIMARY_QUERY, "composio_firecrawl_search_primary")
+
+    # Cloudflare search is a secondary discovery source; enrichment remains the Worker stage.
     for item in CLOUDFLARE_PRIMARY_RESULTS.get(p, []):
         u = val(item.get("url")).rstrip("/")
         if not u or not good(p, u):
@@ -1139,20 +1225,25 @@ def pace_profile_enrichment(platform):
 def provider_chain(p, url):
     errors = []
 
-    # Active production routes are deliberately separated by network:
-    # Apify handles LinkedIn company pages; Cloudflare handles Facebook pages.
-    if p == "linkedin":
-        if not APIFY:
-            return "", None, ["Apify:APIFY_API_TOKEN missing"]
-        providers = [("Apify", lambda: apify_profile(p, url))]
-    elif p == "facebook":
-        if not CLOUDFLARE_TOKEN:
-            return "", None, ["CloudflareDeepBackup:SOCIAL_DEEP_BACKUP_TOKEN missing"]
-        if CLOUDFLARE_CALLS_THIS_RUN >= MAX_CLOUDFLARE_CALLS_PER_RUN:
-            return "", None, ["CloudflareDeepBackup:cloudflare_per_run_cap_reached"]
-        providers = [("CloudflareDeepBackup", lambda: cloudflare_profile(p, url))]
-    else:
+    # Cloudflare performs the first profile/contact enrichment attempt when enabled.
+    # Apify is a backup for LinkedIn; the Worker action cap is always respected.
+    if p not in ("linkedin", "facebook"):
         return "", None, [f"unsupported_platform:{p}"]
+
+    providers = []
+    if CLOUDFLARE_TOKEN and CLOUDFLARE_PRIMARY_ENRICHMENT:
+        if CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+            providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
+        else:
+            errors.append("CloudflareDeepBackup:cloudflare_per_run_cap_reached")
+    elif p == "facebook" and CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+        providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
+
+    if p == "linkedin" and APIFY:
+        providers.append(("Apify", lambda: apify_profile(p, url)))
+    if not providers:
+        errors.append("no_profile_provider_available_or_worker_cap_reached")
+        return "", None, errors
 
     for name, fn in providers:
         try:
@@ -1535,6 +1626,7 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "outcome": outcome,
         "discovered_candidates": discovered,
         "new_qualified_leads_added": added,
+        "composio_requests": COMPOSIO_AUDIT,
         "cloudflare_calls": CLOUDFLARE_CALLS_THIS_RUN,
         "cloudflare_requests": [
             {k: v for k, v in item.items() if k != "profile_url"}
@@ -1587,13 +1679,29 @@ def main():
         f"personal_profile_keys={len(EXISTING_PERSONAL_KEYS)}"
     )
 
-    # Cloudflare is reserved for public Facebook discovery. LinkedIn company
-    # discovery runs through Apify; Exa is retained as a bounded Facebook backup.
+    # Composio Firecrawl is the primary discovery stage for both requested networks.
     is_auto = PLATFORM not in PLATFORMS
     platforms_to_collect = AUTO_PLATFORMS if is_auto else [PLATFORM]
-    CLOUDFLARE_PRIMARY_RESULTS["linkedin"] = []
-    CLOUDFLARE_PRIMARY_RESULTS["facebook"] = []
-    if CLOUDFLARE_TOKEN and PLATFORM != "linkedin":
+    for target in ("linkedin", "facebook"):
+        COMPOSIO_PRIMARY_RESULTS[target] = []
+        CLOUDFLARE_PRIMARY_RESULTS[target] = []
+
+    if COMPOSIO_API_KEY:
+        for target_platform in platforms_to_collect:
+            try:
+                COMPOSIO_PRIMARY_RESULTS[target_platform] = composio_search_candidates(
+                    target_platform, CLOUDFLARE_PRIMARY_QUERY
+                )
+            except Exception as exc:
+                print(
+                    f"Composio primary discovery failed; continuing with bounded backups: "
+                    f"platform={target_platform}; {type(exc).__name__}: {exc}"
+                )
+    else:
+        print("COMPOSIO_PRIMARY_SKIPPED: COMPOSIO_API_KEY missing; bounded backups remain available")
+
+    # Cloudflare /search is a bounded discovery backup only; /collect is used for profile/contact enrichment.
+    if CLOUDFLARE_TOKEN and PLATFORM != "linkedin" and not any(COMPOSIO_PRIMARY_RESULTS.values()):
         try:
             primary_platform = "facebook" if is_auto else PLATFORM
             primary_candidates = cloudflare_search_candidates(
@@ -1604,18 +1712,16 @@ def main():
                 if candidate_platform in CLOUDFLARE_PRIMARY_RESULTS:
                     CLOUDFLARE_PRIMARY_RESULTS[candidate_platform].append(candidate)
             print(
-                "CLOUDFLARE_PRIMARY_DISCOVERY "
+                "CLOUDFLARE_DISCOVERY_BACKUP "
                 + json.dumps({
                     "requested_platform": primary_platform,
                     "linkedin_candidates": len(CLOUDFLARE_PRIMARY_RESULTS["linkedin"]),
                     "facebook_candidates": len(CLOUDFLARE_PRIMARY_RESULTS["facebook"]),
-                    "known_company_urls_loaded": len(EXISTING_SOCIAL_KEYS),
-                    "known_personal_urls_loaded": len(EXISTING_PERSONAL_KEYS),
                 }, ensure_ascii=False)
             )
         except Exception as exc:
             print(
-                f"Cloudflare primary discovery failed; using bounded native-search fallback: "
+                f"Cloudflare discovery backup failed; using other bounded providers: "
                 f"{type(exc).__name__}: {exc}"
             )
 
