@@ -193,9 +193,11 @@ def relevant_social_profile(platform, url, company, website, location, bio):
 
 NATIVE_QUERIES = {
     "linkedin": [
+        # Role-led searches can surface public post authors who are buyers or decision-makers.
+        'China industrial lubricant procurement manager',
+        'Jiangsu lubricating oil purchasing manager',
         'China industrial lubricant manufacturer factory lubricating oil producer',
-        'Chinese industrial lubricants blending plant hydraulic oil gear oil manufacturer',
-        '中国 工业润滑油 润滑脂 生产厂家 制造商',
+        '中国 工业润滑油 采购经理 生产厂家',
     ],
     "facebook": [
         'China industrial lubricant factory manufacturer lubricating oil producer',
@@ -361,6 +363,11 @@ def _linkedin_provider_candidates(query):
         params={"query": query},
         timeout=20,
     )
+    # ScrapeCreators currently uses HTTP 404 for some valid searches with no
+    # matching public posts. Treat that as an empty result, not a broken endpoint.
+    if response.status_code == 404:
+        print("LinkedIn provider search: no public post matches (HTTP 404 interpreted as empty results)")
+        return []
     response.raise_for_status()
     payload = response.json()
     if isinstance(payload, dict) and payload.get("success") is False:
@@ -429,10 +436,16 @@ def personal_profile_candidate_score(result, url):
         return 0
     if not any(term in text for term in CHINA_SIGNALS):
         return 0
-    if not any(term in text for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS):
+    # A role mentioned only in a post can describe somebody else. Require the
+    # buyer/decision-maker evidence in public author identity metadata instead.
+    role_text = " ".join([
+        val(result.get("title")), val(result.get("headline")),
+        val(result.get("current_company"))
+    ]).lower()
+    if not any(term in role_text for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS):
         return 0
     return 10 + sum(1 for term in CHINA_SIGNALS if term in text) + sum(
-        1 for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS if term in text
+        1 for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS if term in role_text
     )
 
 
@@ -565,6 +578,7 @@ def discover(p):
     """Return several ranked candidates across both targeted queries."""
     last_error = None
     ranked_by_url = {}
+    personal_by_url = {}
     for q in NATIVE_QUERIES[p]:
         try:
             results = native_candidates(p, q)
@@ -580,17 +594,23 @@ def discover(p):
             score = social_candidate_score(p, item, u)
             if not score:
                 continue
-            current = ranked_by_url.get(u)
+            is_personal = p == "linkedin" and urlparse(u).path.lower().startswith("/in/")
+            target = personal_by_url if is_personal else ranked_by_url
+            current = target.get(u)
             candidate = (score, u, q, DISCOVERY_METHODS[p])
             if current is None or score > current[0]:
-                ranked_by_url[u] = candidate
+                target[u] = candidate
 
-        # Stop querying this platform as soon as the first query has enough
-        # candidates, reducing repeated provider calls and preserving API quota.
-        if len(ranked_by_url) >= MAX_ITEMS:
+        # Keep the company lead quota independent from account-only people.
+        # Continue role-led LinkedIn searches until both buckets have useful
+        # candidates or the bounded query list is exhausted.
+        if len(ranked_by_url) >= MAX_ITEMS and (
+            p != "linkedin" or len(personal_by_url) >= 3
+        ):
             break
 
     ranked = sorted(ranked_by_url.values(), key=lambda item: item[0], reverse=True)
+    personal_ranked = sorted(personal_by_url.values(), key=lambda item: item[0], reverse=True)
 
     # The Worker has a real /search route, separate from its /collect profile
     # route. Use it only when native discovery yields no relevant candidates.
@@ -617,15 +637,18 @@ def discover(p):
     # Gather a small candidate pool from each enabled platform. Final profile
     # validation remains strict; the main loop stops after five accepted leads.
     selected = ranked[:MAX_ITEMS]
-    if selected:
+    selected_people = personal_ranked[:3] if p == "linkedin" else []
+    if selected or selected_people:
+        method = (selected[0][3] if selected else selected_people[0][3])
         print(
-            f"Native social discovery ranking: platform={p}; method={selected[0][3]}; "
-            f"candidates={len(ranked)}; selected_for_enrichment={len(selected)}; "
-            f"top_score={selected[0][0]}"
+            f"Native social discovery ranking: platform={p}; method={method}; "
+            f"company_candidates={len(ranked)}; selected_for_enrichment={len(selected)}; "
+            f"personal_account_candidates={len(selected_people)}; "
+            f"top_score={(selected[0][0] if selected else selected_people[0][0])}"
         )
     elif last_error:
         print(f"Social discovery ended without candidates: platform={p}; last_error={type(last_error).__name__}: {last_error}")
-    return [(u, q, method) for _, u, q, method in selected]
+    return [(u, q, method) for _, u, q, method in selected + selected_people]
 
 def get_json(url, headers=None, params=None, timeout=45):
     r = session.get(
@@ -1151,7 +1174,8 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "notes": [
             "Public LinkedIn company pages and public Facebook pages only.",
             "HTTP success does not guarantee usable public profile fields.",
-            "Email and WhatsApp outreach remain disabled for this pilot."
+            "Outbound email and WhatsApp delivery are controlled by the workflow outreach_enabled input.",
+            "Personal LinkedIn rows contain only public profile identity and provenance; no contact fields are stored."
         ]
     }
     REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -1169,6 +1193,12 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
 
 
 def main():
+    # Always create the account-only CSV with a stable header, even when no
+    # relevant personal profile is discovered in this run.
+    if not PERSONAL_PROFILES.exists():
+        with PERSONAL_PROFILES.open("w", encoding="utf-8", newline="") as handle:
+            csv.DictWriter(handle, fieldnames=PERSONAL_PROFILE_FIELDS).writeheader()
+
     # Auto mode actively searches both allowed networks on every run.
     # Manual mode still restricts collection to the explicitly selected network.
     is_auto = PLATFORM not in PLATFORMS
@@ -1187,6 +1217,10 @@ def main():
     if not found:
         print("No Facebook or LinkedIn candidates found")
         write_run_report(platforms_to_collect, 0, 0, {"ScrapeCreators": 0, "CloudflareDeepBackup": 0, "failed": 0}, "no_candidates")
+        print(
+            f"PERSONAL_PROFILE_SUMMARY discovered=0; new_account_only_records=0; "
+            f"file={PERSONAL_PROFILES.relative_to(ROOT)}; contact_details_saved=false"
+        )
         return
 
     rows = []
