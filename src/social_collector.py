@@ -18,6 +18,7 @@ REQUEST_INTERVAL_SECONDS = max(11.0, float(os.getenv("SOCIAL_REQUEST_INTERVAL_SE
 LAST_PROFILE_REQUEST_AT = 0.0
 LAST_CLOUDFLARE_REQUEST_AT = 0.0
 CLOUDFLARE_SEARCH_USED_THIS_RUN = False
+FACEBOOK_GOOGLE_SEARCH_USED_THIS_RUN = False
 CLOUDFLARE_CALLS_THIS_RUN = 0
 MAX_CLOUDFLARE_CALLS_PER_RUN = 2
 CLOUDFLARE_AUDIT = []
@@ -230,8 +231,7 @@ def _scrapecreators_get(path, params):
 
 
 def _facebook_native_candidates(query):
-    # Search the public Facebook Ad Library's company/page index. This is
-    # platform-native public data, but it is not a general search of every Page.
+    # First search the public Facebook Ad Library company/page index.
     data = _scrapecreators_get(
         "/v1/facebook/adLibrary/search/companies", {"query": query}
     )
@@ -257,6 +257,47 @@ def _facebook_native_candidates(query):
             "content": val(item.get("description") or item.get("about") or
                            item.get("category") or item.get("category_name")),
         })
+    if out:
+        return out
+
+    # Ad Library company search is not a general Facebook Page search. If it
+    # has no match, make one bounded Google-index fallback per run (1 credit),
+    # restricted to public Facebook URLs. The query itself is never evidence.
+    global FACEBOOK_GOOGLE_SEARCH_USED_THIS_RUN
+    if FACEBOOK_GOOGLE_SEARCH_USED_THIS_RUN:
+        return []
+    FACEBOOK_GOOGLE_SEARCH_USED_THIS_RUN = True
+    google_query = (
+        'site:facebook.com ("industrial lubricant" OR "lubricating oil" OR '
+        '"industrial grease" OR 润滑油 OR 润滑脂) '
+        '(China OR Chinese OR 中国) (manufacturer OR factory OR 生产厂家)'
+    )
+    google_data = _scrapecreators_get(
+        "/v1/google/search", {"query": google_query, "region": "CN", "page": 1}
+    )
+    google_items = google_data.get("results") or []
+    for item in google_items:
+        if not isinstance(item, dict):
+            continue
+        url = val(item.get("url"))
+        if not url or not good("facebook", url):
+            continue
+        if any(part in urlparse(url).path.lower() for part in (
+            "/posts/", "/photos/", "/videos/", "/reel/", "/reels/",
+            "/watch", "/groups/", "/events/", "/marketplace/", "/story.php",
+            "/permalink.php", "/login"
+        )):
+            continue
+        out.append({
+            "url": url,
+            "title": val(item.get("title")),
+            "content": val(item.get("description") or item.get("snippet")),
+            "search_provider": "ScrapeCreators Google Search",
+        })
+    print(
+        f"Facebook public page search fallback: google_used=true; "
+        f"results={len(google_items)}; facebook_candidates={len(out)}"
+    )
     return out
 
 
@@ -1172,7 +1213,7 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
             1 for item in PROFILE_AUDIT if item.get("outcome") == "personal_account_saved"
         ),
         "notes": [
-            "Public LinkedIn company pages and public Facebook pages only.",
+            "Public LinkedIn company pages, qualifying public LinkedIn personal profiles, and public Facebook pages only.",
             "HTTP success does not guarantee usable public profile fields.",
             "Outbound email and WhatsApp delivery are controlled by the workflow outreach_enabled input.",
             "Personal LinkedIn rows contain only public profile identity and provenance; no contact fields are stored."
