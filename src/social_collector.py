@@ -1847,31 +1847,9 @@ def run_product_web_collection():
         for row in rows if val(row.get("website") or row.get("source_url"))
     }
 
-    if FIRECRAWL_SEARCHES_THIS_RUN >= MAX_FIRECRAWL_SEARCHES_PER_RUN:
-        print("FIRECRAWL_PRODUCT_SEARCH blocked: per_run_cap_reached")
-        return
-
-    # Use one compact query; search backends can return zero results when
-    # product, market, buyer types and contact qualifiers are all combined.
+    # Use one compact query; the product, market and buyer type remain configurable.
     query = f'{PRODUCT_NAME} manufacturers companies in {TARGET_MARKET}'
-    FIRECRAWL_SEARCHES_THIS_RUN += 1
-    response = session.post(
-        "https://api.firecrawl.dev/v2/search",
-        headers={
-            "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        json={"query": query, "limit": 10},
-        timeout=45,
-    )
-    if response.status_code == 402:
-        print("FIRECRAWL_PRODUCT_SEARCH stopped: credit_limit_reached_http_402; no retries")
-        return
-    response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, dict) or payload.get("success") is False:
-        raise RuntimeError("Firecrawl product search returned an unsuccessful response")
+
     def find_result_items(node):
         if isinstance(node, list):
             direct = [item for item in node if isinstance(item, dict) and val(item.get("url"))]
@@ -1888,12 +1866,68 @@ def run_product_web_collection():
                 if found:
                     return found
             for child in node.values():
-                found = find_result_items(child)
-                if found:
-                    return found
+                if isinstance(child, (dict, list)):
+                    found = find_result_items(child)
+                    if found:
+                        return found
         return []
 
-    items = find_result_items(payload.get("data") or payload.get("results") or payload)
+    # Composio is the primary discovery route. Direct Firecrawl is the bounded
+    # fallback when the Composio project has no usable Firecrawl connection/results.
+    payload = {}
+    items = []
+    search_provider = "Composio Firecrawl"
+    composio_error = ""
+    if COMPOSIO_API_KEY:
+        try:
+            account = _resolve_composio_firecrawl_account()
+            composio_response = session.post(
+                COMPOSIO_EXECUTE_URL,
+                headers={"x-api-key": COMPOSIO_API_KEY, "Accept": "application/json", "Content-Type": "application/json"},
+                json={
+                    "user_id": account["user_id"],
+                    "connected_account_id": account["id"],
+                    "arguments": {"q": query, "limit": 10, "formats": ["markdown"]},
+                },
+                timeout=75,
+            )
+            composio_response.raise_for_status()
+            payload = composio_response.json()
+            if isinstance(payload, dict) and payload.get("successful") is False:
+                raise RuntimeError("Composio Firecrawl Search returned successful=false")
+            items = find_result_items(payload.get("data") or payload)
+            print(f"COMPOSIO_PRODUCT_SEARCH results={len(items)}")
+        except Exception as exc:
+            composio_error = f"{type(exc).__name__}: {exc}"
+            print(f"COMPOSIO_PRODUCT_SEARCH failed; trying bounded direct Firecrawl fallback: {composio_error}")
+            items = []
+
+    if not items:
+        search_provider = "Direct Firecrawl fallback"
+        if not FIRECRAWL_API_KEY:
+            raise RuntimeError("No usable Composio product results and FIRECRAWL_API_KEY missing")
+        if FIRECRAWL_SEARCHES_THIS_RUN >= MAX_FIRECRAWL_SEARCHES_PER_RUN:
+            print("FIRECRAWL_PRODUCT_SEARCH blocked: per_run_cap_reached")
+            return
+        FIRECRAWL_SEARCHES_THIS_RUN += 1
+        response = session.post(
+            "https://api.firecrawl.dev/v2/search",
+            headers={
+                "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json={"query": query, "limit": 10},
+            timeout=45,
+        )
+        if response.status_code == 402:
+            print("FIRECRAWL_PRODUCT_SEARCH stopped: credit_limit_reached_http_402; no retries")
+            return
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get("success") is False:
+            raise RuntimeError("Firecrawl product search returned an unsuccessful response")
+        items = find_result_items(payload.get("data") or payload.get("results") or payload)
 
     email_re = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
     phone_re = re.compile(r"(?<!\w)(?:\+?\d[\d ().-]{7,}\d)")
@@ -1996,6 +2030,8 @@ def run_product_web_collection():
     print(
         "FIRECRAWL_PRODUCT_RUN " + json.dumps({
             "mode": "product_web",
+            "search_provider": search_provider,
+            "composio_fallback_reason": composio_error,
             "searches_used": FIRECRAWL_SEARCHES_THIS_RUN,
             "per_run_search_cap": MAX_FIRECRAWL_SEARCHES_PER_RUN,
             "search_result_count": len(items),
