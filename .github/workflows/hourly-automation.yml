@@ -69,7 +69,8 @@ jobs:
         if: ${{ !inputs.validation_only }}
         env:
           COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
-          COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID: ${{ vars.COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID }}
+          COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID: ${{ vars.COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID || 'firecrawl_eurite-sext' }}
+          COMPOSIO_USER_ID: 'GLOBALI90'
           CLOUDFLARE_PRIMARY_ENRICHMENT: 'true'
           APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
           EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
