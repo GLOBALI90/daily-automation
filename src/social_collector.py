@@ -239,12 +239,12 @@ def relevant_social_profile(platform, url, company, website, location, bio):
         "singapore", "australia", "canada", "pakistan", "bangladesh",
         "saudi arabia", "united arab emirates", "turkey", "mexico",
     )
-    if any(signal in location_text for signal in non_china_locations):
+    if TARGET_MARKET.lower() in ("china", "cn", "中国") and any(signal in location_text for signal in non_china_locations):
         return False
     china_match = any(signal in text for signal in MARKET_SIGNALS) or domain(url).endswith(".cn")
     if not china_match:
         return False
-    lubricant_match = any(term in text for term in INDUSTRY_TERMS)
+    lubricant_match = any(term in text for term in PRODUCT_TERMS)
     producer_match = any(term in text for term in (
         "factory", "manufacturer", "manufacturing", "producer", "production",
         "blending plant", "lubricant plant", "industrial plant",
@@ -328,9 +328,8 @@ def _facebook_native_candidates(query):
         return []
     FACEBOOK_GOOGLE_SEARCH_USED_THIS_RUN = True
     google_query = (
-        'site:facebook.com ("industrial lubricant" OR "lubricating oil" OR '
-        '"industrial grease" OR 润滑油 OR 润滑脂) '
-        '(China OR Chinese OR 中国) (manufacturer OR factory OR 生产厂家)'
+        f'site:facebook.com "{PRODUCT_NAME}" "{TARGET_MARKET}" '
+        f'({BUYER_TYPES}) company website contact'
     )
     google_data = _scrapecreators_get(
         "/v1/google/search", {"query": google_query, "region": "CN", "page": 1}
@@ -744,9 +743,9 @@ def personal_profile_candidate_score(result, url):
         val(result.get("headline")), val(result.get("current_company")),
         val(result.get("location")), url
     ]).lower()
-    if not any(term in text for term in INDUSTRY_TERMS):
+    if not any(term in text for term in PRODUCT_TERMS):
         return 0
-    if not any(term in text for term in CHINA_SIGNALS):
+    if not any(term in text for term in MARKET_SIGNALS):
         return 0
     # A role mentioned only in a post can describe somebody else. Require the
     # buyer/decision-maker evidence in public author identity metadata instead.
