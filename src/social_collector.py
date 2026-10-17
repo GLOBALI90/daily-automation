@@ -225,7 +225,7 @@ def infer_social_industry(company, website, location, bio):
 
 
 def relevant_social_profile(platform, url, company, website, location, bio):
-    """Accept only China-based industrial-lubricant manufacturers and producers."""
+    """Accept product-relevant public social pages in the configured target market."""
     text = " ".join([url, company, website, location, bio]).lower()
     location_text = val(location).lower()
     if not company or company.lower() in {"unknown", "none", "n/a", "facebook", "linkedin"}:
@@ -892,12 +892,7 @@ def _resolve_composio_firecrawl_account():
     response = session.get(
         "https://backend.composio.dev/api/v3.1/connected_accounts",
         headers={"x-api-key": COMPOSIO_API_KEY, "Accept": "application/json"},
-        params=[
-            ("toolkit_slugs", "firecrawl"),
-            ("statuses", "ACTIVE"),
-            ("account_type", "ALL"),
-            ("limit", 100),
-        ],
+        params={"account_type": "ALL", "limit": 100},
         timeout=20,
     )
     response.raise_for_status()
@@ -955,8 +950,9 @@ def _resolve_composio_firecrawl_account():
                 "owner_present": bool(account.get("user_id") or account.get("userId") or account.get("entity_id") or account.get("entityId")),
             })
         raise RuntimeError(
-            "No active Firecrawl REST connected account found in Composio account list "
-            f"(response_keys={keys}; account_diagnostics={json.dumps(diagnostics, ensure_ascii=False)})"
+            "No active Firecrawl REST connected account found in this Composio API-key project "
+            f"(total_items={payload.get('total_items', 'unknown') if isinstance(payload, dict) else 'unknown'}; "
+            f"response_keys={keys}; account_diagnostics={json.dumps(diagnostics, ensure_ascii=False)})"
         )
 
     configured = COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID
@@ -2011,9 +2007,9 @@ def main():
         row.update({
             "company_name": company,
             "website": web,
-            "country": "China",
+            "country": TARGET_MARKET,
             "industry": inferred_industry,
-            "buyer_type": "industrial-lubricant manufacturer / producer",
+            "buyer_type": BUYER_TYPES,
             "product_interest": product_labels.get(inferred_industry, inferred_industry),
             "contact_person": contact,
             "email": email,
