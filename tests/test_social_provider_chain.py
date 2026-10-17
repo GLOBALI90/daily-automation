@@ -725,6 +725,7 @@ class ProviderChainTests(unittest.TestCase):
                 patch.object(social, "TARGET_MARKET", "China"),
                 patch.object(social, "BUYER_TYPES", "manufacturers, importers"),
                 patch.object(social, "MAX_ITEMS", 3),
+                patch.object(social, "GITHUB_RUN_NUMBER", 0),
                 patch.object(social, "FIRECRAWL_SEARCHES_THIS_RUN", 0),
                 patch.object(social.session, "post", return_value=Response()) as post,
             ):
