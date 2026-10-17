@@ -919,9 +919,23 @@ def _resolve_composio_firecrawl_account():
 
     if not active:
         keys = sorted(payload.keys()) if isinstance(payload, dict) else []
+        diagnostics = []
+        for account in accounts[:10]:
+            if not isinstance(account, dict):
+                diagnostics.append({"type": type(account).__name__})
+                continue
+            toolkit = account.get("toolkit") or account.get("app") or {}
+            diagnostics.append({
+                "keys": sorted(account.keys()),
+                "status": val(account.get("status") or (account.get("state") or {}).get("status") if isinstance(account.get("state"), dict) else account.get("status")),
+                "toolkit": val(toolkit.get("slug") or toolkit.get("name") or toolkit.get("id")) if isinstance(toolkit, dict) else val(toolkit),
+                "toolkit_slug": val(account.get("toolkit_slug") or account.get("app_slug") or account.get("appName")),
+                "id_present": bool(account.get("id") or account.get("connected_account_id")),
+                "owner_present": bool(account.get("user_id") or account.get("userId") or account.get("entity_id") or account.get("entityId")),
+            })
         raise RuntimeError(
             "No active Firecrawl REST connected account found in Composio account list "
-            f"(response_keys={keys})"
+            f"(response_keys={keys}; account_diagnostics={json.dumps(diagnostics, ensure_ascii=False)})"
         )
 
     configured = COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID
