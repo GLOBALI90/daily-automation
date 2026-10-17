@@ -3,6 +3,21 @@ name: ROZHAN Hourly Automation
 on:
   workflow_dispatch:
     inputs:
+      product_name:
+        description: "Product to find prospective business customers for"
+        required: true
+        type: string
+        default: "industrial lubricants"
+      target_market:
+        description: "Target country or market for prospective customers"
+        required: true
+        type: string
+        default: "China"
+      buyer_types:
+        description: "Customer types to prioritize, comma-separated"
+        required: true
+        type: string
+        default: "manufacturers, importers, distributors, industrial end-users"
       social_platform:
         description: "Collect public pages from the selected networks; save relevant LinkedIn people as account-only records"
         required: false
@@ -68,6 +83,9 @@ jobs:
       - name: Collect public social leads (Composio Firecrawl primary; Cloudflare enrichment; providers as backup)
         if: ${{ !inputs.validation_only }}
         env:
+          PRODUCT_NAME: ${{ inputs.product_name || 'industrial lubricants' }}
+          TARGET_MARKET: ${{ inputs.target_market || 'China' }}
+          BUYER_TYPES: ${{ inputs.buyer_types || 'manufacturers, importers, distributors, industrial end-users' }}
           COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
           COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID: ${{ vars.COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID || 'firecrawl_eurite-sext' }}
           COMPOSIO_USER_ID: 'GLOBALI90'
