@@ -69,6 +69,7 @@ jobs:
         if: ${{ !inputs.validation_only }}
         env:
           SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
+          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
           SOCIAL_DEEP_BACKUP_TOKEN: ${{ secrets.SOCIAL_DEEP_BACKUP_TOKEN }}
           SOCIAL_DEEP_BACKUP_URL: ${{ vars.SOCIAL_DEEP_BACKUP_URL || 'https://patient-moon-b87e.mohamadsbrfit760li.workers.dev' }}
           SOCIAL_PLATFORM: ${{ inputs.social_platform || 'auto' }}
