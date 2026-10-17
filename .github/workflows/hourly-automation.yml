@@ -93,7 +93,7 @@ jobs:
         run: python src/process_leads.py
 
       - name: Save results
-        if: ${{ always() && !inputs.validation_only }}
+        if: ${{ always() && !inputs.validation_only && github.ref == 'refs/heads/main' }}
         run: |
           git config user.name "rozhanglobal-automation"
           git config user.email "actions@users.noreply.github.com"
