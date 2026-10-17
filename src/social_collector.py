@@ -1866,7 +1866,7 @@ def run_product_web_collection():
             "credits_estimate_for_search": 2 if items or payload.get("success") else 0,
             "scrape_calls": 0,
             "outreach_sent": False,
-            "file": str(PRODUCT_LEADS.relative_to(ROOT)),
+            "file": str(PRODUCT_LEADS.relative_to(ROOT)) if PRODUCT_LEADS.is_relative_to(ROOT) else PRODUCT_LEADS.name,
         }, ensure_ascii=False),
         flush=True,
     )
