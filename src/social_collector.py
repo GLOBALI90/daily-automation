@@ -39,7 +39,7 @@ SCRAPECREATORS = os.getenv("SCRAPECREATORS_API_KEY", "").strip()
 BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
 EXA_API_KEY = os.getenv("EXA_API_KEY", "").strip()
 EXA_USAGE_FILE = DATA / "exa_search_usage.json"
-EXA_MAX_MONTHLY_CALLS = 100
+EXA_MAX_MONTHLY_CALLS = 20
 
 CLOUDFLARE_URL = os.getenv(
     "SOCIAL_DEEP_BACKUP_URL",
