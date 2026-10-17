@@ -151,7 +151,7 @@ class ProviderChainTests(unittest.TestCase):
         linkedin_result = [(
             "https://www.linkedin.com/company/example-chemical",
             "China Jiangsu chemical manufacturer",
-            "scrapecreators_linkedin_public_posts_search",
+            "apify_linkedin_company_search",
         )]
         with patch.object(social, "discover", side_effect=[[], linkedin_result]) as discover:
             platform, found = social.discover_with_auto_fallback("facebook", True)
