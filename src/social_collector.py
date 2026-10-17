@@ -42,6 +42,9 @@ PRODUCT_LEAD_FIELDS = [
 ]
 FIRECRAWL_SEARCHES_THIS_RUN = 0
 MAX_FIRECRAWL_SEARCHES_PER_RUN = 1
+FIRECRAWL_SCRAPES_THIS_RUN = 0
+MAX_FIRECRAWL_SCRAPES_PER_RUN = 1
+GITHUB_RUN_NUMBER = int(os.getenv("GITHUB_RUN_NUMBER", "0") or "0")
 COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID = os.getenv("COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID", "").strip()
 COMPOSIO_USER_ID = os.getenv("COMPOSIO_USER_ID", "GLOBALI90").strip()
 CLOUDFLARE_PRIMARY_ENRICHMENT = os.getenv("CLOUDFLARE_PRIMARY_ENRICHMENT", "false").strip().lower() in ("1", "true", "yes", "on")
@@ -1840,13 +1843,53 @@ def run_product_web_collection():
             continue
         if any(host == blocked or host.endswith("." + blocked) for blocked in excluded_hosts):
             continue
+        title = val(item.get("title"))
+        path = urlparse(url).path.lower()
+        # Reject obvious listicles/directories rather than presenting them as buyers.
+        if any(signal in title.lower() for signal in ("top 10", "best 10", "supplier directory", "company directory", "list of suppliers")):
+            continue
+        if any(signal in path for signal in ("/blog/", "/blogs/", "/category/", "/tag/", "/directory/", "/listing/")):
+            continue
         blob = " ".join(val(item.get(k)) for k in ("title", "description", "markdown", "content"))
-        item_emails = sorted(set(email_re.findall(blob)))
-        item_phones = sorted(set(phone_re.findall(blob)))
         website = f"{urlparse(url).scheme}://{host}"
         if host in seen_domains:
             continue
-        title = val(item.get("title"))
+
+        # Only scrape one official-site candidate every third workflow run.
+        # Search-only runs cost about 2 credits; this averages ~2.33 credits/run.
+        scrape_attempted = False
+        if GITHUB_RUN_NUMBER > 0 and GITHUB_RUN_NUMBER % 3 == 0 and FIRECRAWL_SCRAPES_THIS_RUN < MAX_FIRECRAWL_SCRAPES_PER_RUN:
+            FIRECRAWL_SCRAPES_THIS_RUN += 1
+            scrape_attempted = True
+            try:
+                scrape_response = session.post(
+                    "https://api.firecrawl.dev/v2/scrape",
+                    headers={
+                        "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                    },
+                    json={"url": url, "formats": ["markdown"], "onlyMainContent": True},
+                    timeout=45,
+                )
+                if scrape_response.status_code == 402:
+                    print("FIRECRAWL_PRODUCT_SCRAPE skipped: credit_limit_reached_http_402; no retries")
+                else:
+                    scrape_response.raise_for_status()
+                    scrape_payload = scrape_response.json()
+                    scrape_data = scrape_payload.get("data") if isinstance(scrape_payload, dict) else {}
+                    if isinstance(scrape_data, dict):
+                        metadata = scrape_data.get("metadata") or {}
+                        source_url = val(metadata.get("sourceURL") or metadata.get("url"))
+                        # Do not trust a redirected third-party page as the company's own contact source.
+                        if not source_url or domain(source_url) == host:
+                            scraped_markdown = val(scrape_data.get("markdown") or scrape_data.get("content"))
+                            if scraped_markdown:
+                                blob = (blob + "\n" + scraped_markdown).strip()
+            except Exception as exc:
+                print(f"FIRECRAWL_PRODUCT_SCRAPE failed safely: {type(exc).__name__}")
+        item_emails = sorted(set(email_re.findall(blob)))
+        item_phones = sorted(set(phone_re.findall(blob)))
         company = re.split(r"\s+[|–—-]\s+", title, maxsplit=1)[0].strip() or host
         row = {
             "company_name": company[:200],
@@ -1858,7 +1901,7 @@ def run_product_web_collection():
             "phone": item_phones[0] if item_phones else "",
             "source_url": url,
             "evidence": blob[:2500],
-            "verification_status": "search_result_only_needs_review",
+            "verification_status": "official_domain_scraped_needs_review" if scrape_attempted and len(blob) > 0 else "search_result_only_needs_review",
             "run_id": RUN_ID,
             "collected_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -1885,7 +1928,9 @@ def run_product_web_collection():
             "new_company_candidates": added,
             "total_saved_candidates": len(rows),
             "credits_estimate_for_search": 2 if items or payload.get("success") else 0,
-            "scrape_calls": 0,
+            "scrape_calls": FIRECRAWL_SCRAPES_THIS_RUN,
+            "scrape_per_run_cap": MAX_FIRECRAWL_SCRAPES_PER_RUN,
+            "workflow_run_number": GITHUB_RUN_NUMBER,
             "outreach_sent": False,
             "file": str(PRODUCT_LEADS.relative_to(ROOT)) if PRODUCT_LEADS.is_relative_to(ROOT) else PRODUCT_LEADS.name,
         }, ensure_ascii=False),
