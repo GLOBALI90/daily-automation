@@ -365,7 +365,7 @@ def _linkedin_provider_candidates(query):
     )
     # ScrapeCreators currently uses HTTP 404 for some valid searches with no
     # matching public posts. Treat that as an empty result, not a broken endpoint.
-    if response.status_code == 404:
+    if getattr(response, "status_code", None) == 404:
         print("LinkedIn provider search: no public post matches (HTTP 404 interpreted as empty results)")
         return []
     response.raise_for_status()
