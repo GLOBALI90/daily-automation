@@ -9,7 +9,7 @@ import gemini_utils
 
 
 class ProviderChainTests(unittest.TestCase):
-    def test_scrapecreators_is_only_active_profile_provider(self):
+    def test_facebook_profile_enrichment_uses_cloudflare_only(self):
         valid_profile = (
             "Example Industrial Lubricants Company",
             "https://example.cn",
@@ -24,8 +24,10 @@ class ProviderChainTests(unittest.TestCase):
         )
 
         with (
-            patch.object(social, "cloudflare_profile") as cf,
-            patch.object(social, "scrapecreators_profile", return_value={"name": "Example Industrial Lubricants Company"}) as sc,
+            patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
+            patch.object(social, "CLOUDFLARE_CALLS_THIS_RUN", 0),
+            patch.object(social, "cloudflare_profile", return_value={"name": "Example Industrial Lubricants Company"}) as cf,
+            patch.object(social, "scrapecreators_profile") as sc,
             patch.object(social, "normalize_provider", return_value=valid_profile),
             patch.object(social, "relevant_social_profile", return_value=True),
         ):
@@ -33,12 +35,11 @@ class ProviderChainTests(unittest.TestCase):
                 "facebook", "https://www.facebook.com/example"
             )
 
-        self.assertEqual(provider, "ScrapeCreators")
+        self.assertEqual(provider, "CloudflareDeepBackup")
         self.assertTrue(data)
         self.assertEqual(errors, [])
-        cf.assert_not_called()
-        sc.assert_called_once()
-        self.assertFalse(hasattr(social, "socialfetch_profile"))
+        cf.assert_called_once()
+        sc.assert_not_called()
 
     def test_brave_search_backup_parses_only_public_facebook_pages(self):
         class Response:
@@ -91,28 +92,26 @@ class ProviderChainTests(unittest.TestCase):
             )
         get.assert_not_called()
 
-    def test_cloudflare_is_fallback_for_both_linkedin_and_facebook(self):
-        for platform, url in (
-            ("linkedin", "https://www.linkedin.com/company/example-lubricants"),
-            ("facebook", "https://www.facebook.com/examplelubricants"),
+    def test_linkedin_profile_enrichment_uses_apify_only(self):
+        url = "https://www.linkedin.com/company/example-lubricants"
+        valid_profile = (
+            "Example Industrial Lubricants", "https://example.cn", "Jiangsu, China",
+            "Example Industrial Lubricants", "", "", "Industrial lubricants manufacturer factory in China",
+            "100", "", url,
+        )
+        with (
+            patch.object(social, "APIFY", "test-apify-token"),
+            patch.object(social, "apify_profile", return_value=[{"name": "Example Industrial Lubricants"}]) as apify,
+            patch.object(social, "cloudflare_profile") as cf,
+            patch.object(social, "normalize_provider", return_value=valid_profile),
+            patch.object(social, "relevant_social_profile", return_value=True),
         ):
-            valid_profile = (
-                "Example Industrial Lubricants", "https://example.cn", "Jiangsu, China",
-                "Example Industrial Lubricants", "", "", "Industrial lubricants manufacturer factory in China",
-                "100", "", url,
-            )
-            with (
-                patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
-                patch.object(social, "CLOUDFLARE_CALLS_THIS_RUN", 0),
-                patch.object(social, "scrapecreators_profile", side_effect=RuntimeError("temporary provider failure")),
-                patch.object(social, "cloudflare_profile", return_value={"name": "Example Industrial Lubricants"}) as cf,
-                patch.object(social, "normalize_provider", return_value=valid_profile),
-                patch.object(social, "relevant_social_profile", return_value=True),
-            ):
-                provider, data, errors = social.provider_chain(platform, url)
-            self.assertEqual(provider, "CloudflareDeepBackup")
-            self.assertTrue(data)
-            cf.assert_called_once_with(platform, url)
+            provider, data, errors = social.provider_chain("linkedin", url)
+        self.assertEqual(provider, "Apify")
+        self.assertTrue(data)
+        self.assertEqual(errors, [])
+        apify.assert_called_once_with("linkedin", url)
+        cf.assert_not_called()
 
     def test_cloudflare_search_fallback_runs_when_native_discovery_is_empty(self):
         class Response:
@@ -123,9 +122,9 @@ class ProviderChainTests(unittest.TestCase):
                 return {
                     "success": True,
                     "results": [{
-                        "platform": "linkedin",
+                        "platform": "facebook",
                         "candidates": [
-                            "https://www.linkedin.com/company/example-lubricants"
+                            "https://www.facebook.com/example-lubricants"
                         ],
                         "candidate_count": 1,
                     }],
@@ -139,14 +138,14 @@ class ProviderChainTests(unittest.TestCase):
             patch.object(social, "native_candidates", return_value=[]),
             patch.object(social.session, "post", return_value=Response()) as post,
         ):
-            found = social.discover("linkedin")
+            found = social.discover("facebook")
 
         self.assertEqual(len(found), 1)
-        self.assertEqual(found[0][0], "https://www.linkedin.com/company/example-lubricants")
+        self.assertEqual(found[0][0], "https://www.facebook.com/example-lubricants")
         self.assertEqual(found[0][2], "cloudflare_browser_search_fallback")
         post.assert_called_once()
         self.assertTrue(post.call_args.args[0].endswith("/search"))
-        self.assertEqual(post.call_args.kwargs["json"]["platform"], "linkedin")
+        self.assertEqual(post.call_args.kwargs["json"]["platform"], "facebook")
 
     def test_auto_falls_back_to_linkedin_when_facebook_has_no_candidates(self):
         linkedin_result = [(
@@ -209,17 +208,14 @@ class ProviderChainTests(unittest.TestCase):
             ["gemini-3.6-flash", "gemini-3.6-flash", "gemini-3.8-flash"],
         )
 
-    def test_irrelevant_scrapecreators_profile_does_not_spend_worker_quota(self):
+    def test_irrelevant_apify_profile_does_not_use_cloudflare(self):
         company_url = "https://www.linkedin.com/company/jiangsu-example-chemicals"
         with (
+            patch.object(social, "APIFY", "test-apify-token"),
             patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
             patch.object(social, "CLOUDFLARE_CALLS_THIS_RUN", 0),
             patch.object(social, "cloudflare_profile") as cf,
-            patch.object(
-                social, "scrapecreators_profile",
-                return_value={"name": "Example Chemicals", "location": "India", "followers": 20},
-            ),
-            # Provider data is sufficient to classify the page as out of scope.
+            patch.object(social, "apify_profile", return_value={"name": "Example Chemicals"}),
             patch.object(social, "normalize_provider", return_value=(
                 "Example Chemicals", "", "India", "Example Chemicals", "", "",
                 "Industrial lubricant manufacturer in India", "20", "",
