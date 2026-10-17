@@ -648,11 +648,31 @@ def cloudflare_search_candidates(platform, query):
 
 
 def discover(p):
-    """Return several ranked candidates across both targeted queries."""
+    """Use Cloudflare public search first, then supplement with native search."""
+    global DUPLICATE_PREFILTER_SKIPPED
     last_error = None
     ranked_by_url = {}
     personal_by_url = {}
+
+    # Cloudflare is the primary discovery source. Candidate URLs are provisional
+    # until profile enrichment confirms the China/manufacturer requirements.
+    for item in CLOUDFLARE_PRIMARY_RESULTS.get(p, []):
+        u = val(item.get("url")).rstrip("/")
+        if not u or not good(p, u):
+            continue
+        if is_existing_candidate(p, u):
+            DUPLICATE_PREFILTER_SKIPPED += 1
+            print(f"Skipping previously stored candidate before enrichment: platform={p}; url={u}")
+            continue
+        is_personal = p == "linkedin" and urlparse(u).path.lower().startswith("/in/")
+        target = personal_by_url if is_personal else ranked_by_url
+        target[u] = (1000, u, CLOUDFLARE_PRIMARY_QUERY, "cloudflare_browser_search_primary")
+
     for q in NATIVE_QUERIES[p]:
+        if len(ranked_by_url) >= MAX_ITEMS and (
+            p != "linkedin" or len(personal_by_url) >= 3
+        ):
+            break
         try:
             results = native_candidates(p, q)
         except Exception as exc:
@@ -663,6 +683,10 @@ def discover(p):
         for item in results:
             u = val(item.get("url")).rstrip("/")
             if not u or not good(p, u):
+                continue
+            if is_existing_candidate(p, u):
+                DUPLICATE_PREFILTER_SKIPPED += 1
+                print(f"Skipping previously stored candidate before enrichment: platform={p}; url={u}")
                 continue
             score = social_candidate_score(p, item, u)
             if not score:
@@ -1233,6 +1257,10 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "discovered_candidates_total": discovered,
         "discovered_candidates_by_platform": DISCOVERY_COUNTS,
         "new_qualified_leads_added": added,
+        "existing_social_records_checked": len(EXISTING_SOCIAL_KEYS),
+        "existing_personal_profiles_checked": len(EXISTING_PERSONAL_KEYS),
+        "duplicates_skipped_before_enrichment": DUPLICATE_PREFILTER_SKIPPED,
+        "cloudflare_primary_discovery": bool(CLOUDFLARE_TOKEN),
         "provider_counts": provider_counts,
         "cloudflare": {
             "token_configured": bool(CLOUDFLARE_TOKEN),
