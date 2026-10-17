@@ -40,6 +40,57 @@ class ProviderChainTests(unittest.TestCase):
         sc.assert_called_once()
         self.assertFalse(hasattr(social, "socialfetch_profile"))
 
+    def test_brave_search_backup_parses_only_public_facebook_pages(self):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"web": {"results": [
+                    {
+                        "url": "https://www.facebook.com/jiangsuindustriallubricants/",
+                        "title": "Jiangsu Industrial Lubricants Manufacturer",
+                        "description": "Factory producing industrial lubricating oil in Jiangsu, China",
+                    },
+                    {
+                        "url": "https://www.facebook.com/groups/lubricants/",
+                        "title": "Industrial lubricants group",
+                        "description": "China factory",
+                    },
+                ]}}
+
+        with (
+            patch.object(social, "BRAVE_SEARCH_API_KEY", "test-brave-key"),
+            patch.object(social.session, "get", return_value=Response()) as get,
+        ):
+            candidates = social._brave_search_candidates("facebook", "ignored query")
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["search_provider"], "Brave Search API")
+        self.assertGreater(
+            social.social_candidate_score("facebook", candidates[0], candidates[0]["url"]),
+            0,
+        )
+        self.assertEqual(
+            get.call_args.args[0],
+            "https://api.search.brave.com/res/v1/web/search",
+        )
+        self.assertEqual(
+            get.call_args.kwargs["headers"]["X-Subscription-Token"],
+            "test-brave-key",
+        )
+
+    def test_brave_search_backup_is_skipped_without_key(self):
+        with (
+            patch.object(social, "BRAVE_SEARCH_API_KEY", ""),
+            patch.object(social.session, "get") as get,
+        ):
+            self.assertEqual(
+                social._brave_search_candidates("facebook", "industrial lubricants"),
+                [],
+            )
+        get.assert_not_called()
+
     def test_cloudflare_is_fallback_for_both_linkedin_and_facebook(self):
         for platform, url in (
             ("linkedin", "https://www.linkedin.com/company/example-lubricants"),
