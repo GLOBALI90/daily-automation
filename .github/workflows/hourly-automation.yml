@@ -96,6 +96,8 @@ jobs:
           BUYER_TYPES: ${{ inputs.buyer_types || 'manufacturers, importers, distributors, industrial end-users' }}
           COLLECTION_MODE: ${{ inputs.collection_mode || 'product_web' }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.6-flash' }}
           COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
           COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID: ${{ vars.COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID || 'firecrawl_eurite-sext' }}
           COMPOSIO_USER_ID: 'GLOBALI90'
