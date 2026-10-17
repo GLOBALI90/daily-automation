@@ -1,28 +1,28 @@
 {
-  "run_id": "39022962115",
-  "started_at_utc": "2026-10-17T09:55:55.199340+00:00",
-  "finished_at_utc": "2026-10-17T09:56:57.477744+00:00",
-  "outcome": "no_new_candidates",
+  "run_id": "39044492014",
+  "started_at_utc": "2026-10-17T15:19:12.890139+00:00",
+  "finished_at_utc": "2026-10-17T15:20:36.472850+00:00",
+  "outcome": "completed",
   "platforms": [
     "facebook",
     "linkedin"
   ],
   "max_valid_leads_per_run": 3,
   "minimum_seconds_between_profile_enrichment_requests": 15.0,
-  "discovered_candidates_total": 0,
+  "discovered_candidates_total": 3,
   "discovered_candidates_by_platform": {
     "facebook": 0,
-    "linkedin": 0
+    "linkedin": 3
   },
-  "new_qualified_leads_added": 0,
+  "new_qualified_leads_added": 1,
   "existing_social_records_checked": 8,
   "existing_personal_profiles_checked": 0,
   "duplicates_skipped_before_enrichment": 0,
   "cloudflare_primary_discovery": true,
   "provider_counts": {
-    "ScrapeCreators": 0,
+    "ScrapeCreators": 1,
     "CloudflareDeepBackup": 0,
-    "failed": 0
+    "failed": 2
   },
   "cloudflare": {
     "token_configured": true,
@@ -33,13 +33,44 @@
         "route": "/search",
         "platform": "both",
         "http_status": 200,
-        "elapsed_seconds": 12.47,
+        "elapsed_seconds": 0.42,
         "outcome": "success",
         "candidate_count": 0
       }
     ]
   },
-  "profile_fetch_results": [],
+  "profile_fetch_results": [
+    {
+      "platform": "linkedin",
+      "profile_url": "https://linkedin.com/company/anhui-guanao-industry-co-ltd",
+      "outcome": "provider_failed",
+      "errors": [
+        "ScrapeCreators"
+      ]
+    },
+    {
+      "platform": "linkedin",
+      "profile_url": "https://cn.linkedin.com/company/fuchs-lubricants-china-ltd",
+      "outcome": "provider_failed",
+      "errors": [
+        "ScrapeCreators"
+      ]
+    },
+    {
+      "platform": "linkedin",
+      "profile_url": "https://cn.linkedin.com/company/frtlube-com",
+      "provider": "ScrapeCreators",
+      "fetch_status": "profile_fields_extracted",
+      "extracted_fields": [
+        "name",
+        "website",
+        "location_or_address",
+        "description_or_bio",
+        "followers"
+      ],
+      "outcome": "accepted_relevant"
+    }
+  ],
   "personal_profiles_saved_this_run": 0,
   "notes": [
     "Public LinkedIn company pages, qualifying public LinkedIn personal profiles, and public Facebook pages only.",
