@@ -37,6 +37,9 @@ PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").strip().lower().lstrip(chr(92) +
 APIFY = os.getenv("APIFY_API_TOKEN", "").strip()
 SCRAPECREATORS = os.getenv("SCRAPECREATORS_API_KEY", "").strip()
 BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
+EXA_API_KEY = os.getenv("EXA_API_KEY", "").strip()
+EXA_USAGE_FILE = DATA / "exa_search_usage.json"
+EXA_MAX_MONTHLY_CALLS = 100
 
 CLOUDFLARE_URL = os.getenv(
     "SOCIAL_DEEP_BACKUP_URL",
@@ -478,6 +481,100 @@ def _linkedin_provider_candidates(query):
     return out
 
 
+def _reserve_exa_search_call():
+    """Persist a conservative monthly request cap; failed attempts count too."""
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    try:
+        usage = json.loads(EXA_USAGE_FILE.read_text(encoding="utf-8")) if EXA_USAGE_FILE.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        # Fail closed rather than risk unmetered API calls if quota state is unreadable.
+        print("EXA_SEARCH_BACKUP blocked: monthly usage state unreadable")
+        return False
+    if usage.get("month") != month:
+        usage = {"month": month, "calls": 0}
+    calls = int(usage.get("calls", 0) or 0)
+    if calls >= EXA_MAX_MONTHLY_CALLS:
+        print(f"EXA_SEARCH_BACKUP blocked: monthly_cap={EXA_MAX_MONTHLY_CALLS}; month={month}")
+        return False
+    usage["calls"] = calls + 1
+    EXA_USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    EXA_USAGE_FILE.write_text(json.dumps(usage, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return True
+
+
+def _exa_search_candidates(platform, query):
+    """Exa indexed web search backup; only public Facebook/LinkedIn pages are returned."""
+    if not EXA_API_KEY or platform not in ("facebook", "linkedin"):
+        return []
+    if not _reserve_exa_search_call():
+        return []
+
+    if platform == "facebook":
+        search_query = (
+            'Public Facebook pages for China-based industrial lubricant or lubricating oil '
+            'manufacturers and industrial grease factories; Chinese terms 润滑油 润滑脂 生产厂家'
+        )
+        include_domains = ["facebook.com"]
+    else:
+        search_query = (
+            'Public LinkedIn company pages for China-based industrial lubricant or lubricating oil '
+            'manufacturers and industrial grease factories; Chinese terms 润滑油 润滑脂 生产厂家'
+        )
+        include_domains = ["linkedin.com"]
+
+    response = session.post(
+        "https://api.exa.ai/search",
+        headers={
+            "x-api-key": EXA_API_KEY,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        json={
+            "query": search_query,
+            "type": "auto",
+            "numResults": 10,
+            "includeDomains": include_domains,
+            "contents": {"highlights": True},
+        },
+        timeout=25,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    items = payload.get("results") or []
+    out = []
+    seen = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        url = val(item.get("url")).split("#", 1)[0].rstrip("/")
+        if not url or not good(platform, url) or url in seen:
+            continue
+        path = urlparse(url).path.lower()
+        if platform == "linkedin" and not path.startswith("/company/"):
+            continue
+        if platform == "facebook" and any(part in path for part in (
+            "/posts/", "/photos/", "/videos/", "/reel/", "/reels/",
+            "/watch", "/groups/", "/events/", "/marketplace/",
+            "/story.php", "/permalink.php", "/login"
+        )):
+            continue
+        highlights = item.get("highlights") or []
+        content = " ".join(val(value) for value in highlights if val(value)) if isinstance(highlights, list) else val(highlights)
+        content = content or val(item.get("text") or item.get("summary"))
+        seen.add(url)
+        out.append({
+            "url": url,
+            "title": val(item.get("title")),
+            "content": content,
+            "search_provider": "Exa Search API",
+        })
+    print(
+        f"EXA_SEARCH_BACKUP platform={platform}; "
+        f"results={len(items)}; usable_public_pages={len(out)}"
+    )
+    return out
+
+
 def _brave_search_candidates(platform, query):
     """Independent indexed-search backup; the search query is never evidence."""
     if not BRAVE_SEARCH_API_KEY:
@@ -741,6 +838,32 @@ def discover(p):
 
     # Cloudflare remains primary. Use an independent web index only to
     # top up a short result set, before the existing social-specific providers.
+    # Exa is a card-free monthly-credit backup. Usage is committed with run data;
+    # fail closed at 100 requests/month to keep the free allowance conservative.
+    if len(ranked_by_url) < MAX_ITEMS and EXA_API_KEY:
+        try:
+            backup_results = _exa_search_candidates(p, NATIVE_QUERIES[p][0])
+            for item in backup_results:
+                u = val(item.get("url")).rstrip("/")
+                if not u or not good(p, u) or is_existing_candidate(p, u):
+                    continue
+                score = social_candidate_score(p, item, u)
+                if not score:
+                    print(
+                        f"Exa Search candidate rejected by strict qualification: "
+                        f"platform={p}; url={u}"
+                    )
+                    continue
+                candidate = (score, u, NATIVE_QUERIES[p][0], "exa_search_api_backup")
+                current = ranked_by_url.get(u)
+                if current is None or score > current[0]:
+                    ranked_by_url[u] = candidate
+        except Exception as exc:
+            print(
+                f"Exa Search backup failed: platform={p}; "
+                f"error={type(exc).__name__}: {exc}"
+            )
+
     if len(ranked_by_url) < MAX_ITEMS and BRAVE_SEARCH_API_KEY:
         try:
             backup_results = _brave_search_candidates(p, NATIVE_QUERIES[p][0])
