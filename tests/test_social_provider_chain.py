@@ -262,6 +262,55 @@ class ProviderChainTests(unittest.TestCase):
         )
         self.assertEqual(score, 0)
 
+    def test_linkedin_search_http_404_is_treated_as_empty_results(self):
+        class Response:
+            status_code = 404
+            def raise_for_status(self):
+                import requests
+                raise requests.HTTPError("404 Client Error")
+
+        with (
+            patch.object(social, "SCRAPECREATORS", "test-api-key"),
+            patch.object(social.session, "get", return_value=Response()),
+        ):
+            results = social._linkedin_provider_candidates("short query with no matches")
+        self.assertEqual(results, [])
+
+    def test_personal_profile_role_must_be_in_author_metadata_not_post_text(self):
+        candidate = {
+            "title": "Li Wei",
+            "content": "China industrial lubricant procurement manager wanted; contact our team",
+            "headline": "Operations specialist",
+            "current_company": "Jiangsu Industrial Lubricants Manufacturer",
+            "location": "Jiangsu, China",
+        }
+        self.assertEqual(
+            social.personal_profile_candidate_score(
+                candidate, "https://www.linkedin.com/in/li-wei"
+            ),
+            0,
+        )
+
+    def test_empty_run_creates_personal_profiles_csv_header(self):
+        import csv
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "personal_profiles.csv"
+            with (
+                patch.object(social, "ROOT", Path(tmp)),
+                patch.object(social, "PERSONAL_PROFILES", path),
+                patch.object(social, "PLATFORM", "facebook"),
+                patch.object(social, "PLATFORMS", ["linkedin", "facebook"]),
+                patch.object(social, "AUTO_PLATFORMS", ["facebook"]),
+                patch.object(social, "discover", return_value=[]),
+                patch.object(social, "write_run_report"),
+            ):
+                social.main()
+            with path.open(encoding="utf-8", newline="") as handle:
+                reader = csv.reader(handle)
+                self.assertEqual(next(reader), social.PERSONAL_PROFILE_FIELDS)
+                self.assertEqual(list(reader), [])
+
     def test_relevant_public_linkedin_personal_profile_is_accepted_for_account_only_list(self):
         candidate = {
             "title": "Li Wei",
