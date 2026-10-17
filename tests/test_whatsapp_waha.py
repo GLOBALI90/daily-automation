@@ -77,6 +77,14 @@ class WuapiOutboundWhatsAppTests(unittest.TestCase):
         self.assertEqual(result, "missing_wuapi_config")
         post.assert_not_called()
 
+    def test_generic_phone_is_not_treated_as_verified_whatsapp(self):
+        row = {"phone": "+861234567890", "whatsapp": ""}
+        self.assertEqual(process_leads.verified_whatsapp_number(row), "")
+        row["whatsapp"] = "+861234567890"
+        self.assertEqual(
+            process_leads.verified_whatsapp_number(row), "+861234567890"
+        )
+
     def test_invalid_non_international_number_never_sends(self):
         with patch.object(process_leads.requests, "post") as post:
             result = process_leads.send_whatsapp(
