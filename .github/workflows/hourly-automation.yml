@@ -3,6 +3,14 @@ name: ROZHAN Hourly Automation
 on:
   workflow_dispatch:
     inputs:
+      collection_mode:
+        description: "Choose product-web customer discovery or legacy social-page collection"
+        required: true
+        type: choice
+        options:
+          - product_web
+          - social
+        default: product_web
       product_name:
         description: "Product to find prospective business customers for"
         required: true
@@ -80,12 +88,14 @@ jobs:
       - name: Test social provider fallback and response quality
         run: python -m unittest discover -s tests -v
 
-      - name: Collect public social leads (Composio Firecrawl primary; Cloudflare enrichment; providers as backup)
+      - name: Collect product customers (bounded direct Firecrawl) or social leads
         if: ${{ !inputs.validation_only }}
         env:
           PRODUCT_NAME: ${{ inputs.product_name || 'industrial lubricants' }}
           TARGET_MARKET: ${{ inputs.target_market || 'China' }}
           BUYER_TYPES: ${{ inputs.buyer_types || 'manufacturers, importers, distributors, industrial end-users' }}
+          COLLECTION_MODE: ${{ inputs.collection_mode || 'product_web' }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
           COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID: ${{ vars.COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID || 'firecrawl_eurite-sext' }}
           COMPOSIO_USER_ID: 'GLOBALI90'
@@ -99,8 +109,8 @@ jobs:
           SOCIAL_REQUEST_INTERVAL_SECONDS: '15'
         run: python src/social_collector.py
 
-      - name: Generate outreach drafts (delivery controlled by outreach_enabled; max five leads per run)
-        if: ${{ !inputs.validation_only }}
+      - name: Generate outreach drafts (social mode only; delivery requires explicit opt-in)
+        if: ${{ !inputs.validation_only && inputs.collection_mode == 'social' && inputs.outreach_enabled }}
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.6-flash' }}
@@ -135,5 +145,6 @@ jobs:
           path: |
             data/social_run_report.json
             data/personal_profiles.csv
+            data/product_leads.csv
           if-no-files-found: warn
           retention-days: 14
