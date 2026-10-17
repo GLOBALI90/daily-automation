@@ -9,6 +9,28 @@ import gemini_utils
 
 
 class ProviderChainTests(unittest.TestCase):
+    def test_composio_explicit_account_does_not_send_mismatched_user_id(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"successful": True, "data": {"results": []}}
+
+        with (
+            patch.object(social, "COMPOSIO_API_KEY", "test-composio-key"),
+            patch.object(social, "COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID", "firecrawl_test-account"),
+            patch.object(social, "COMPOSIO_USER_ID", "GLOBALI90"),
+            patch.object(social.session, "post", return_value=Response()) as post,
+        ):
+            result = social.composio_search_candidates("linkedin", "test query")
+
+        self.assertEqual(result, [])
+        body = post.call_args.kwargs["json"]
+        self.assertEqual(body["connected_account_id"], "firecrawl_test-account")
+        self.assertNotIn("user_id", body)
+        self.assertEqual(body["arguments"]["q"].startswith("site:linkedin.com/company"), True)
+
     def test_facebook_profile_enrichment_uses_cloudflare_only(self):
         valid_profile = (
             "Example Industrial Lubricants Company",
