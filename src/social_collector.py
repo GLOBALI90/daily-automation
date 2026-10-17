@@ -238,9 +238,8 @@ NATIVE_QUERIES = {
 }
 
 DISCOVERY_METHODS = {
-    "linkedin": "scrapecreators_linkedin_public_posts_search",
-    "facebook": "scrapecreators_facebook_ad_library_company_search",
-    "x": "apify_x_native_search",
+    "linkedin": "apify_linkedin_company_search",
+    "facebook": "cloudflare_facebook_public_page_search",
 }
 
 
@@ -1635,7 +1634,7 @@ def main():
         print("No new Facebook or LinkedIn candidates found after checking stored records")
         write_run_report(
             platforms_to_collect, 0, 0,
-            {"ScrapeCreators": 0, "CloudflareDeepBackup": 0, "failed": 0},
+            {"Apify": 0, "CloudflareDeepBackup": 0, "failed": 0},
             "no_new_candidates"
         )
         print(
@@ -1674,7 +1673,6 @@ def main():
     added = 0
     provider_counts = {
         "Apify": 0,
-        "ScrapeCreators": 0,
         "CloudflareDeepBackup": 0,
         "failed": 0
     }
