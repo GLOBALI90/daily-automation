@@ -870,6 +870,73 @@ def cloudflare_search_candidates(platform, query):
     return candidates
 
 
+def _resolve_composio_firecrawl_account():
+    """Resolve the real Composio REST account ID and owning user for Firecrawl."""
+    if not COMPOSIO_API_KEY:
+        raise RuntimeError("COMPOSIO_API_KEY missing")
+    response = session.get(
+        "https://backend.composio.dev/api/v3/connected_accounts",
+        headers={"x-api-key": COMPOSIO_API_KEY, "Accept": "application/json"},
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    data = payload.get("data", payload) if isinstance(payload, dict) else {}
+    accounts = []
+    if isinstance(data, list):
+        accounts = data
+    elif isinstance(data, dict):
+        for key in ("items", "connected_accounts", "connectedAccounts", "results"):
+            if isinstance(data.get(key), list):
+                accounts = data[key]
+                break
+        if not accounts and isinstance(data.get("items"), dict):
+            accounts = data["items"].get("data", []) or []
+
+    active = []
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        toolkit = account.get("toolkit") or account.get("app") or {}
+        slug = val(
+            toolkit.get("slug") if isinstance(toolkit, dict) else toolkit
+        ) or val(account.get("toolkit_slug") or account.get("app_slug"))
+        status = val(account.get("status")).upper()
+        if slug.lower() != "firecrawl" or status not in ("ACTIVE", "CONNECTED", "ENABLED"):
+            continue
+        account_id = val(account.get("id") or account.get("connected_account_id"))
+        if not account_id:
+            continue
+        owner_id = val(
+            account.get("user_id") or account.get("userId")
+            or account.get("entity_id") or account.get("entityId")
+        )
+        active.append({
+            "id": account_id,
+            "user_id": owner_id,
+            "is_default": bool(account.get("is_default") or account.get("isDefault")),
+        })
+
+    if not active:
+        keys = sorted(payload.keys()) if isinstance(payload, dict) else []
+        raise RuntimeError(
+            "No active Firecrawl REST connected account found in Composio account list "
+            f"(response_keys={keys})"
+        )
+
+    configured = COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID
+    selected = next((item for item in active if item["id"] == configured), None)
+    if selected is None:
+        selected = next((item for item in active if item["is_default"]), active[0])
+        print(
+            "COMPOSIO_ACCOUNT_ALIAS_NOT_REST_ID: using resolved active Firecrawl account; "
+            f"active_accounts={len(active)}"
+        )
+    if not selected["user_id"]:
+        selected["user_id"] = COMPOSIO_USER_ID
+    return selected
+
+
 def composio_search_candidates(platform, query):
     """Primary discovery via Composio's Firecrawl Search tool."""
     if not COMPOSIO_API_KEY:
@@ -882,13 +949,12 @@ def composio_search_candidates(platform, query):
         f'site:{domain_filter} ("industrial lubricant" OR "lubricating oil" OR '
         f'"industrial grease" OR 润滑油 OR 润滑脂) China manufacturer factory'
     )
-    # Pin execution to the Firecrawl connection configured in GitHub Secrets,
-    # while retaining user_id as the owning Composio entity. Supplying only
-    # user_id fails when the connection belongs to a different Composio user;
-    # supplying only connected_account_id can fail entity validation.
+    # Resolve the actual REST connected-account ID and its owning user.
+    # The MCP alias in GitHub Secrets is not necessarily the REST account ID.
+    account = _resolve_composio_firecrawl_account()
     body = {
-        "user_id": COMPOSIO_USER_ID,
-        "connected_account_id": COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID,
+        "user_id": account["user_id"],
+        "connected_account_id": account["id"],
         "arguments": {
             "q": search_query,
             "limit": min(10, max(3, MAX_ITEMS * 3)),
