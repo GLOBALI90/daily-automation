@@ -1800,9 +1800,28 @@ def run_product_web_collection():
     payload = response.json()
     if not isinstance(payload, dict) or payload.get("success") is False:
         raise RuntimeError("Firecrawl product search returned an unsuccessful response")
-    items = payload.get("data") or payload.get("results") or []
-    if not isinstance(items, list):
-        items = []
+    def find_result_items(node):
+        if isinstance(node, list):
+            direct = [item for item in node if isinstance(item, dict) and val(item.get("url"))]
+            if direct:
+                return direct
+            for child in node:
+                found = find_result_items(child)
+                if found:
+                    return found
+        elif isinstance(node, dict):
+            for key in ("web", "results", "items", "organic", "searchResults", "data"):
+                child = node.get(key)
+                found = find_result_items(child)
+                if found:
+                    return found
+            for child in node.values():
+                found = find_result_items(child)
+                if found:
+                    return found
+        return []
+
+    items = find_result_items(payload.get("data") or payload.get("results") or payload)
 
     email_re = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
     phone_re = re.compile(r"(?<!\w)(?:\+?\d[\d ().-]{7,}\d)")
@@ -1862,6 +1881,7 @@ def run_product_web_collection():
             "search_result_count": len(items),
             "response_keys": sorted(payload.keys()),
             "result_payload_type": type(payload.get("data")).__name__,
+            "result_container_keys": sorted(payload.get("data").keys()) if isinstance(payload.get("data"), dict) else [],
             "new_company_candidates": added,
             "total_saved_candidates": len(rows),
             "credits_estimate_for_search": 2 if items or payload.get("success") else 0,
