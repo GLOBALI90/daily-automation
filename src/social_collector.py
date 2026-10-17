@@ -693,19 +693,15 @@ def _apify_linkedin_company_candidates(query):
 
 def native_candidates(platform, query):
     if platform == "facebook":
-        # Facebook discovery is handled by Cloudflare first and Exa as backup.
-        # ScrapeCreators is retained only as a legacy local/test adapter when configured.
-        if not SCRAPECREATORS:
-            return []
-        return _facebook_native_candidates(query)
-    if platform == "x":
-        return _x_native_candidates(query)
+        # Facebook discovery is handled by Cloudflare, with Exa as a bounded backup.
+        return []
     if platform == "linkedin":
-        # Apify is the active LinkedIn company discovery source. The old
-        # ScrapeCreators adapter is only used when no Apify token is configured.
-        if APIFY:
-            return _apify_linkedin_company_candidates(query)
-        return _linkedin_provider_candidates(query)
+        # LinkedIn company discovery runs only through Apify. Fail closed when
+        # the token is missing; do not silently fall back to retired providers.
+        if not APIFY:
+            print("APIFY_LINKEDIN_SEARCH skipped: APIFY_API_TOKEN missing")
+            return []
+        return _apify_linkedin_company_candidates(query)
     raise ValueError(f"Unsupported social platform: {platform}")
 
 
