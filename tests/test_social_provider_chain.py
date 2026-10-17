@@ -493,6 +493,61 @@ class ProviderChainTests(unittest.TestCase):
         self.assertEqual(len(found), 2)
         self.assertEqual({item[0] for item in found}, {first["url"], second["url"]})
 
+    def test_cloudflare_primary_search_supports_both_platforms(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {
+                    "success": True,
+                    "results": [
+                        {"platform": "linkedin", "candidates": [
+                            "https://www.linkedin.com/company/example-lubricants"
+                        ]},
+                        {"platform": "facebook", "candidates": [
+                            "https://www.facebook.com/examplelubricants"
+                        ]},
+                    ],
+                }
+
+        with (
+            patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
+            patch.object(social, "CLOUDFLARE_CALLS_THIS_RUN", 0),
+            patch.object(social, "CLOUDFLARE_SEARCH_USED_THIS_RUN", False),
+            patch.object(social, "LAST_CLOUDFLARE_REQUEST_AT", 0.0),
+            patch.object(social.session, "post", return_value=Response()) as post,
+        ):
+            found = social.cloudflare_search_candidates("both", "China industrial lubricant")
+
+        self.assertEqual({item["platform"] for item in found}, {"linkedin", "facebook"})
+        self.assertEqual(len(found), 2)
+        self.assertEqual(post.call_args.kwargs["json"]["platform"], "both")
+
+    def test_discover_uses_cloudflare_primary_and_skips_known_urls_before_enrichment(self):
+        known = "https://www.linkedin.com/company/known-lubricants"
+        new = "https://www.linkedin.com/company/new-lubricants"
+        with (
+            patch.object(social, "CLOUDFLARE_PRIMARY_RESULTS", {
+                "linkedin": [
+                    {"url": known, "platform": "linkedin"},
+                    {"url": new, "platform": "linkedin"},
+                ],
+                "facebook": [],
+            }),
+            patch.object(social, "EXISTING_SOCIAL_KEYS", {
+                ("linkedin", social.canonical_social_key("linkedin", known))
+            }),
+            patch.object(social, "EXISTING_PERSONAL_KEYS", set()),
+            patch.object(social, "NATIVE_QUERIES", {"linkedin": []}),
+            patch.object(social, "DUPLICATE_PREFILTER_SKIPPED", 0),
+        ):
+            found = social.discover("linkedin")
+
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0][0], new)
+        self.assertEqual(found[0][2], "cloudflare_browser_search_primary")
+
     def test_cloudflare_worker_request_cap_is_enforced_per_run(self):
         with (
             patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
