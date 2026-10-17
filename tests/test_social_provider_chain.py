@@ -9,7 +9,7 @@ import gemini_utils
 
 
 class ProviderChainTests(unittest.TestCase):
-    def test_composio_search_uses_configured_user_without_mcp_account_alias(self):
+    def test_composio_search_uses_configured_user_and_connected_account(self):
         class Response:
             status_code = 200
             text = ""
@@ -28,7 +28,7 @@ class ProviderChainTests(unittest.TestCase):
         self.assertEqual(result, [])
         body = post.call_args.kwargs["json"]
         self.assertEqual(body["user_id"], "GLOBALI90")
-        self.assertNotIn("connected_account_id", body)
+        self.assertEqual(body["connected_account_id"], "firecrawl_test-account")
         self.assertEqual(body["arguments"]["q"].startswith("site:linkedin.com/company"), True)
 
     def test_facebook_profile_enrichment_uses_cloudflare_only(self):
