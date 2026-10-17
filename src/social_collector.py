@@ -882,12 +882,13 @@ def composio_search_candidates(platform, query):
         f'site:{domain_filter} ("industrial lubricant" OR "lubricating oil" OR '
         f'"industrial grease" OR 润滑油 OR 润滑脂) China manufacturer factory'
     )
-    # The Composio execution API requires user_id. The MCP connection alias
-    # (e.g. "firecrawl_eurite-sext") is not guaranteed to be the API's
-    # connected_account_id, so do not pass that alias to the execution endpoint.
-    # Resolve the default Firecrawl connection for the configured Composio user.
+    # Pin execution to the Firecrawl connection configured in GitHub Secrets,
+    # while retaining user_id as the owning Composio entity. Supplying only
+    # user_id fails when the connection belongs to a different Composio user;
+    # supplying only connected_account_id can fail entity validation.
     body = {
         "user_id": COMPOSIO_USER_ID,
+        "connected_account_id": COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID,
         "arguments": {
             "q": search_query,
             "limit": min(10, max(3, MAX_ITEMS * 3)),
