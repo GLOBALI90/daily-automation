@@ -1858,6 +1858,7 @@ def run_product_web_collection():
         # Only scrape one official-site candidate every third workflow run.
         # Search-only runs cost about 2 credits; this averages ~2.33 credits/run.
         scrape_attempted = False
+        scrape_succeeded = False
         if GITHUB_RUN_NUMBER > 0 and GITHUB_RUN_NUMBER % 3 == 0 and FIRECRAWL_SCRAPES_THIS_RUN < MAX_FIRECRAWL_SCRAPES_PER_RUN:
             FIRECRAWL_SCRAPES_THIS_RUN += 1
             scrape_attempted = True
@@ -1886,6 +1887,7 @@ def run_product_web_collection():
                             scraped_markdown = val(scrape_data.get("markdown") or scrape_data.get("content"))
                             if scraped_markdown:
                                 blob = (blob + "\n" + scraped_markdown).strip()
+                                scrape_succeeded = True
             except Exception as exc:
                 print(f"FIRECRAWL_PRODUCT_SCRAPE failed safely: {type(exc).__name__}")
         item_emails = sorted(set(email_re.findall(blob)))
@@ -1901,7 +1903,7 @@ def run_product_web_collection():
             "phone": item_phones[0] if item_phones else "",
             "source_url": url,
             "evidence": blob[:2500],
-            "verification_status": "official_domain_scraped_needs_review" if scrape_attempted and len(blob) > 0 else "search_result_only_needs_review",
+            "verification_status": "official_domain_scraped_needs_review" if scrape_succeeded else "search_result_only_needs_review",
             "run_id": RUN_ID,
             "collected_at": datetime.now(timezone.utc).isoformat(),
         }
