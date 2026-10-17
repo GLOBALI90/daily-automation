@@ -36,6 +36,7 @@ PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").strip().lower().lstrip(chr(92) +
 
 APIFY = os.getenv("APIFY_API_TOKEN", "").strip()
 SCRAPECREATORS = os.getenv("SCRAPECREATORS_API_KEY", "").strip()
+BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
 
 CLOUDFLARE_URL = os.getenv(
     "SOCIAL_DEEP_BACKUP_URL",
@@ -476,6 +477,76 @@ def _linkedin_provider_candidates(query):
     print(f"LinkedIn provider search: results={len(posts)}; candidate_profiles={len(out)}")
     return out
 
+
+def _brave_search_candidates(platform, query):
+    """Independent indexed-search backup; the search query is never evidence."""
+    if not BRAVE_SEARCH_API_KEY:
+        return []
+
+    if platform == "facebook":
+        search_query = (
+            'site:facebook.com ("industrial lubricant" OR "lubricating oil" OR '
+            '"industrial grease" OR 润滑油 OR 润滑脂) '
+            '(China OR Chinese OR 中国) (manufacturer OR factory OR 生产厂家)'
+        )
+    elif platform == "linkedin":
+        search_query = (
+            'site:linkedin.com/company/ ("industrial lubricant" OR '
+            '"lubricating oil" OR "industrial grease" OR 润滑油 OR 润滑脂) '
+            '(China OR Chinese OR 中国) (manufacturer OR factory OR 生产厂家)'
+        )
+    else:
+        return []
+
+    response = session.get(
+        "https://api.search.brave.com/res/v1/web/search",
+        headers={
+            "X-Subscription-Token": BRAVE_SEARCH_API_KEY,
+            "Accept": "application/json",
+        },
+        params={
+            "q": search_query,
+            "count": 10,
+            "country": "CN",
+            "search_lang": "en",
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    web = payload.get("web") or {}
+    items = web.get("results") or []
+    out = []
+    seen = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        url = val(item.get("url")).split("#", 1)[0].rstrip("/")
+        if not url or not good(platform, url) or url in seen:
+            continue
+        path = urlparse(url).path.lower()
+        if platform == "linkedin" and not path.startswith("/company/"):
+            continue
+        if platform == "facebook" and any(part in path for part in (
+            "/posts/", "/photos/", "/videos/", "/reel/", "/reels/",
+            "/watch", "/groups/", "/events/", "/marketplace/",
+            "/story.php", "/permalink.php", "/login"
+        )):
+            continue
+        seen.add(url)
+        out.append({
+            "url": url,
+            "title": val(item.get("title")),
+            "content": val(item.get("description") or item.get("snippet")),
+            "search_provider": "Brave Search API",
+        })
+    print(
+        f"BRAVE_SEARCH_BACKUP platform={platform}; "
+        f"results={len(items)}; usable_public_pages={len(out)}"
+    )
+    return out
+
+
 def native_candidates(platform, query):
     if platform == "facebook":
         return _facebook_native_candidates(query)
@@ -667,6 +738,32 @@ def discover(p):
         is_personal = p == "linkedin" and urlparse(u).path.lower().startswith("/in/")
         target = personal_by_url if is_personal else ranked_by_url
         target[u] = (1000, u, CLOUDFLARE_PRIMARY_QUERY, "cloudflare_browser_search_primary")
+
+    # Cloudflare remains primary. Use an independent web index only to
+    # top up a short result set, before the existing social-specific providers.
+    if len(ranked_by_url) < MAX_ITEMS and BRAVE_SEARCH_API_KEY:
+        try:
+            backup_results = _brave_search_candidates(p, NATIVE_QUERIES[p][0])
+            for item in backup_results:
+                u = val(item.get("url")).rstrip("/")
+                if not u or not good(p, u) or is_existing_candidate(p, u):
+                    continue
+                score = social_candidate_score(p, item, u)
+                if not score:
+                    print(
+                        f"Brave Search candidate rejected by strict qualification: "
+                        f"platform={p}; url={u}"
+                    )
+                    continue
+                candidate = (score, u, NATIVE_QUERIES[p][0], "brave_search_api_backup")
+                current = ranked_by_url.get(u)
+                if current is None or score > current[0]:
+                    ranked_by_url[u] = candidate
+        except Exception as exc:
+            print(
+                f"Brave Search backup failed: platform={p}; "
+                f"error={type(exc).__name__}: {exc}"
+            )
 
     for q in NATIVE_QUERIES[p]:
         if len(ranked_by_url) >= MAX_ITEMS and (
