@@ -1,7 +1,7 @@
 {
-  "run_id": "39019309419",
-  "started_at_utc": "2026-10-17T08:57:53.655495+00:00",
-  "finished_at_utc": "2026-10-17T08:58:20.896150+00:00",
+  "run_id": "39019867512",
+  "started_at_utc": "2026-10-17T09:06:46.535321+00:00",
+  "finished_at_utc": "2026-10-17T09:07:50.654659+00:00",
   "outcome": "completed",
   "platforms": [
     "facebook",
@@ -14,7 +14,7 @@
     "facebook": 0,
     "linkedin": 1
   },
-  "new_qualified_leads_added": 1,
+  "new_qualified_leads_added": 0,
   "provider_counts": {
     "ScrapeCreators": 1,
     "CloudflareDeepBackup": 0,
@@ -29,7 +29,7 @@
         "route": "/search",
         "platform": "facebook",
         "http_status": 200,
-        "elapsed_seconds": 1.84,
+        "elapsed_seconds": 3.26,
         "outcome": "success",
         "candidate_count": 0
       }
@@ -53,8 +53,9 @@
   ],
   "personal_profiles_saved_this_run": 0,
   "notes": [
-    "Public LinkedIn company pages and public Facebook pages only.",
+    "Public LinkedIn company pages, qualifying public LinkedIn personal profiles, and public Facebook pages only.",
     "HTTP success does not guarantee usable public profile fields.",
-    "Email and WhatsApp outreach remain disabled for this pilot."
+    "Outbound email and WhatsApp delivery are controlled by the workflow outreach_enabled input.",
+    "Personal LinkedIn rows contain only public profile identity and provenance; no contact fields are stored."
   ]
 }
