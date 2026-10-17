@@ -31,9 +31,9 @@ on:
         type: boolean
         default: false
 
-  # Four scheduled runs per UTC week to keep outbound WhatsApp usage conservative.
+  # Run every three hours; outreach remains disabled unless explicitly enabled on manual dispatch.
   schedule:
-    - cron: "0 9 * * 1,3,5,0"
+    - cron: "0 */3 * * *"
 
 permissions:
   contents: write
@@ -65,9 +65,12 @@ jobs:
       - name: Test social provider fallback and response quality
         run: python -m unittest discover -s tests -v
 
-      - name: Collect public social leads (Apify for LinkedIn, Cloudflare for Facebook, Exa backup)
+      - name: Collect public social leads (Composio Firecrawl primary; Cloudflare enrichment; providers as backup)
         if: ${{ !inputs.validation_only }}
         env:
+          COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
+          COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID: ${{ vars.COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID }}
+          CLOUDFLARE_PRIMARY_ENRICHMENT: 'true'
           APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
           EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
           SOCIAL_DEEP_BACKUP_TOKEN: ${{ secrets.SOCIAL_DEEP_BACKUP_TOKEN }}
