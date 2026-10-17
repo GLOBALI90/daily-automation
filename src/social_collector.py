@@ -241,30 +241,26 @@ def relevant_social_profile(platform, url, company, website, location, bio):
     )
     if TARGET_MARKET.lower() in ("china", "cn", "中国") and any(signal in location_text for signal in non_china_locations):
         return False
-    china_match = any(signal in text for signal in MARKET_SIGNALS) or domain(url).endswith(".cn")
-    if not china_match:
+    market_match = any(signal in text for signal in MARKET_SIGNALS)
+    if TARGET_MARKET.lower() in ("china", "cn", "中国"):
+        market_match = market_match or domain(url).endswith(".cn")
+    if not market_match:
         return False
-    lubricant_match = any(term in text for term in PRODUCT_TERMS)
-    producer_match = any(term in text for term in (
-        "factory", "manufacturer", "manufacturing", "producer", "production",
-        "blending plant", "lubricant plant", "industrial plant",
-        "工厂", "生产厂家", "制造厂", "制造商", "生产企业", "调和厂"
-    ))
-    return lubricant_match and producer_match
+    product_match = any(term in text for term in PRODUCT_TERMS)
+    buyer_match = any(term in text for term in BUYER_TYPE_TERMS)
+    return product_match and buyer_match
 
 
 NATIVE_QUERIES = {
     "linkedin": [
-        # Role-led searches can surface public post authors who are buyers or decision-makers.
-        'China industrial lubricant procurement manager',
-        'Jiangsu lubricating oil purchasing manager',
-        'China industrial lubricant manufacturer factory lubricating oil producer',
-        '中国 工业润滑油 采购经理 生产厂家',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" {BUYER_TYPES} company',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" procurement purchasing sourcing',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" supplier importer distributor',
     ],
     "facebook": [
-        'China industrial lubricant factory manufacturer lubricating oil producer',
-        'Chinese industrial grease hydraulic oil lubricant blending plant',
-        '中国 工业润滑油 润滑脂 生产厂家',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" {BUYER_TYPES}',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" company website contact',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" supplier importer distributor',
     ],
 }
 
