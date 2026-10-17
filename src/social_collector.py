@@ -882,14 +882,18 @@ def composio_search_candidates(platform, query):
         f'site:{domain_filter} ("industrial lubricant" OR "lubricating oil" OR '
         f'"industrial grease" OR 润滑油 OR 润滑脂) China manufacturer factory'
     )
-    # An explicit connected_account_id selects the exact account. Do not also
-    # send a guessed user_id: Composio scopes account lookup by both fields, and
-    # a private connection owned under another Composio user then returns 404.
-    body = {"arguments": {"q": search_query, "limit": min(10, max(3, MAX_ITEMS * 3)), "formats": ["markdown"]}}
-    if COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID:
-        body["connected_account_id"] = COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID
-    else:
-        body["user_id"] = COMPOSIO_USER_ID
+    # The Composio execution API requires user_id. The MCP connection alias
+    # (e.g. "firecrawl_eurite-sext") is not guaranteed to be the API's
+    # connected_account_id, so do not pass that alias to the execution endpoint.
+    # Resolve the default Firecrawl connection for the configured Composio user.
+    body = {
+        "user_id": COMPOSIO_USER_ID,
+        "arguments": {
+            "q": search_query,
+            "limit": min(10, max(3, MAX_ITEMS * 3)),
+            "formats": ["markdown"],
+        },
+    }
 
     started = time.monotonic()
     response = session.post(
