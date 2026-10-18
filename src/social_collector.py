@@ -906,6 +906,58 @@ def pace_cloudflare_request():
     LAST_CLOUDFLARE_REQUEST_AT = time.monotonic()
 
 
+def cloudflare_public_web_candidates(query, platform="web"):
+    """Use the bounded Cloudflare Browser Worker for public web or Google Maps discovery."""
+    if platform not in ("web", "maps"):
+        raise ValueError("Cloudflare public search platform must be web or maps")
+    if not CLOUDFLARE_TOKEN:
+        raise RuntimeError("SOCIAL_DEEP_BACKUP_TOKEN missing for Cloudflare public search")
+    global CLOUDFLARE_CALLS_THIS_RUN
+    if CLOUDFLARE_CALLS_THIS_RUN >= MAX_CLOUDFLARE_CALLS_PER_RUN:
+        raise RuntimeError("cloudflare_per_run_cap_reached")
+    CLOUDFLARE_CALLS_THIS_RUN += 1
+    pace_cloudflare_request()
+    started = time.monotonic()
+    response = session.post(
+        f"{CLOUDFLARE_URL}/search",
+        headers={"Authorization": f"Bearer {CLOUDFLARE_TOKEN}", "Content-Type": "application/json"},
+        json={"query": query, "platform": platform},
+        timeout=90,
+    )
+    audit = {"route": "/search", "platform": platform, "http_status": response.status_code,
+             "elapsed_seconds": round(time.monotonic() - started, 2)}
+    if response.status_code >= 400:
+        audit["outcome"] = "http_error"
+        CLOUDFLARE_AUDIT.append(audit)
+        if response.status_code == 429:
+            raise RuntimeError("cloudflare_http_429_daily_limit_reached")
+        raise RuntimeError(f"cloudflare_public_search_http_{response.status_code}:{response.text[:250]}")
+    payload = response.json()
+    details = payload.get("candidate_details", []) if isinstance(payload, dict) else []
+    candidates, seen = [], set()
+    for item in details if isinstance(details, list) else []:
+        if not isinstance(item, dict):
+            continue
+        url = val(item.get("url")).split("#", 1)[0].rstrip("/")
+        if not url.startswith(("https://", "http://")) or url in seen:
+            continue
+        seen.add(url)
+        snippet = val(item.get("snippet"))
+        candidates.append({
+            "url": url, "title": val(item.get("title")),
+            "description": snippet, "content": snippet,
+            "search_provider": "Cloudflare Google Maps Search" if platform == "maps" else "Cloudflare Public Web Search",
+            "is_google_maps": bool(item.get("is_google_maps")) or platform == "maps",
+        })
+        if len(candidates) >= MAX_ITEMS:
+            break
+    audit.update({"outcome": "success", "candidate_count": len(candidates)})
+    CLOUDFLARE_AUDIT.append(audit)
+    print(f"CLOUDFLARE_PUBLIC_SEARCH platform={platform}; http_status={response.status_code}; "
+          f"candidates={len(candidates)}; worker_actions={CLOUDFLARE_CALLS_THIS_RUN}/{MAX_CLOUDFLARE_CALLS_PER_RUN}")
+    return candidates
+
+
 def cloudflare_search_candidates(platform, query):
     """Use at most one bounded Worker search per run to preserve one enrichment call."""
     global CLOUDFLARE_SEARCH_USED_THIS_RUN
@@ -2010,8 +2062,12 @@ def run_product_web_collection():
         print(f"AI_EXISTING_LEADS_CLEANUP removed_non_customer_records={removed_prior}")
 
     seen_domains = {
-        domain(val(row.get("website") or row.get("source_url")))
-        for row in rows if val(row.get("website") or row.get("source_url"))
+        domain(val(row.get("website")))
+        for row in rows if val(row.get("website"))
+    }
+    seen_source_urls = {
+        val(row.get("source_url")).split("#", 1)[0].rstrip("/")
+        for row in rows if val(row.get("source_url"))
     }
 
     # Search for buyers with a country-localized Firecrawl query.
@@ -2097,6 +2153,24 @@ def run_product_web_collection():
             composio_error = f"{type(exc).__name__}: {exc}"
             print(f"COMPOSIO_PRODUCT_SEARCH failed; trying bounded direct Firecrawl fallback: {composio_error}")
             items = []
+
+    # Cloudflare Browser Run also collects public web and Google Maps results.
+    # The Worker enforces four browser actions/day and an 11-second minimum interval.
+    # Alternate sources on discovery runs so they fit within the shared action budget.
+    if not items and CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+        cloudflare_platform = "maps" if GITHUB_RUN_NUMBER % 2 == 0 else "web"
+        cloudflare_query = (
+            f'{TARGET_MARKET} "{PRODUCT_NAME}" {BUYER_TYPES} '
+            + ("businesses companies buyers importers distributors Google Maps" if cloudflare_platform == "maps"
+               else "official company websites buyers importers distributors procurement contact")
+        )
+        try:
+            cloudflare_items = cloudflare_public_web_candidates(cloudflare_query, cloudflare_platform)
+            if cloudflare_items:
+                items = cloudflare_items
+                search_provider = "Cloudflare Google Maps Search" if cloudflare_platform == "maps" else "Cloudflare Public Web Search"
+        except Exception as exc:
+            print(f"CLOUDFLARE_PUBLIC_SEARCH failed safely: {type(exc).__name__}: {str(exc)[:180]}")
 
     if not items:
         search_provider = "Direct Firecrawl fallback"
@@ -2216,7 +2290,12 @@ def run_product_web_collection():
             continue
         url = val(item.get("url")).split("#", 1)[0].rstrip("/")
         host = domain(url)
+        is_google_maps = bool(item.get("is_google_maps")) or (
+            "google." in host and "/maps/" in urlparse(url).path.lower()
+        )
         if not url.startswith(("https://", "http://")) or not host:
+            continue
+        if url in seen_source_urls:
             continue
         if any(host == blocked or host.endswith("." + blocked) for blocked in excluded_hosts):
             continue
@@ -2236,8 +2315,8 @@ def run_product_web_collection():
             continue
         if any(signal in path for signal in ("/blog/", "/blogs/", "/category/", "/tag/", "/directory/", "/listing/")):
             continue
-        website = f"{urlparse(url).scheme}://{host}"
-        if host in seen_domains:
+        website = "" if is_google_maps else f"{urlparse(url).scheme}://{host}"
+        if website and host in seen_domains:
             continue
 
         # Only scrape one official-site candidate every third workflow run.
@@ -2347,7 +2426,9 @@ def run_product_web_collection():
                 }, ensure_ascii=False)
             )
         rows.append(row)
-        seen_domains.add(host)
+        if website:
+            seen_domains.add(host)
+        seen_source_urls.add(url)
         added += 1
         if added >= MAX_ITEMS:
             break
