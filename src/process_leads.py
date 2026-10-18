@@ -298,7 +298,7 @@ def persist_outreach(rows, fieldnames):
 
 
 def main_product_outreach():
-    """Automatically email only high-confidence customers with a public email verified on the official site."""
+    """Automatically contact only AI-cleared, high-confidence buyers using verified public channels."""
     product_file = ROOT / "data" / "product_leads.csv"
     if not product_file.exists():
         print("PRODUCT_OUTREACH skipped: product_leads.csv not found")
@@ -316,14 +316,16 @@ def main_product_outreach():
             if key not in fields:
                 fields.append(key)
 
-    def key_for(row):
-        email = (row.get("email") or "").strip().lower()
-        return f"email:{email}" if email else ""
-
-    done = {
-        key_for(row) for row in existing
-        if row.get("status") == "sent" and key_for(row)
+    sent_emails = {
+        (row.get("email") or "").strip().lower()
+        for row in existing if row.get("status") == "sent" and row.get("email")
     }
+    done_whatsapp = {
+        re.sub(r"\D", "", row.get("whatsapp_number") or "")
+        for row in existing
+        if row.get("whatsapp_status") in {"sent", "queued"} and row.get("whatsapp_number")
+    }
+
     queue = []
     for row in candidates:
         if (row.get("ai_customer_fit") or "").strip().lower() != "likely_customer":
@@ -339,61 +341,81 @@ def main_product_outreach():
         # Search-result snippets alone are not enough for automatic outbound contact.
         if row.get("verification_status") != "official_domain_scraped_needs_review":
             continue
-        email = (row.get("email") or "").strip().lower()
+
         website = (row.get("website") or "").strip()
-        email_match = re.fullmatch(r"[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})", email, re.I)
-        if not email_match or not website:
-            continue
         try:
             from urllib.parse import urlparse
             official_host = (urlparse(website).hostname or "").lower().removeprefix("www.")
         except Exception:
             official_host = ""
-        email_host = email_match.group(1).lower().removeprefix("www.")
-        if not official_host or not (email_host == official_host or email_host.endswith("." + official_host)):
-            continue
-        key = key_for(row)
-        if not key or key in done:
-            continue
-        queue.append(row)
+        email = (row.get("email") or "").strip().lower()
+        email_match = re.fullmatch(r"[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})", email, re.I)
+        email_host = email_match.group(1).lower().removeprefix("www.") if email_match else ""
+        verified_email = bool(
+            email_match and official_host
+            and (email_host == official_host or email_host.endswith("." + official_host))
+            and email not in sent_emails
+        )
+
+        # A generic phone is never promoted to WhatsApp. The source field must
+        # have been explicitly extracted from a WhatsApp label or public wa.me link.
+        wa_number = verified_whatsapp_number(row)
+        wa_digits = re.sub(r"\D", "", wa_number)
+        verified_wa = bool(
+            wa_number.startswith(("+", "00"))
+            and 8 <= len(wa_digits) <= 15
+            and wa_digits not in done_whatsapp
+        )
+        if verified_email or verified_wa:
+            queue.append((row, verified_email, wa_number if verified_wa else ""))
 
     print(
-        f"PRODUCT_OUTREACH_QUEUE eligible={len(queue)} "
-        f"sent_before={len(done)} threshold_confidence=85 "
-        "requires=likely_customer+official_domain_email+official_site_scrape"
+        f"PRODUCT_OUTREACH_QUEUE eligible_companies={len(queue)} "
+        f"sent_emails_before={len(sent_emails)} sent_or_queued_whatsapp_before={len(done_whatsapp)} "
+        "requires=likely_customer+confidence>=85+AI_cleared+official_site_scrape+verified_public_channel"
     )
-    new_rows = []
-    for row in queue[:1]:
+    for row, verified_email, wa_number in queue[:1]:
         company = (row.get("company_name") or row.get("website") or "unnamed lead").strip()
-        message = make_message(row)
-        if not message:
-            print(f"PRODUCT_OUTREACH_SKIP company={company[:100]} reason=message_generation_failed")
-            continue
-        status = send_email(row.get("email", ""), message)
+        message = make_message(row) if verified_email else ""
+        email_status = "not_attempted_no_verified_official_email"
+        if verified_email:
+            if not message:
+                email_status = "ai_failed"
+            else:
+                email_status = send_email(row.get("email", ""), message)
+
+        wa_message = make_whatsapp_message(row) if wa_number else ""
+        wa_status = "not_attempted_no_verified_whatsapp"
+        if wa_number:
+            wa_status = send_whatsapp(wa_number, wa_message) if wa_message else "ai_failed"
+
         outcome = {
             "company_name": row.get("company_name", ""),
             "website": row.get("website", ""),
-            "email": row.get("email", ""),
+            "email": row.get("email", "") if verified_email else "",
             "message": message,
-            "status": status,
-            "whatsapp_number": "",
-            "whatsapp_message": "",
-            "whatsapp_status": "not_attempted_no_verified_whatsapp",
+            "status": email_status,
+            "whatsapp_number": wa_number,
+            "whatsapp_message": wa_message,
+            "whatsapp_status": wa_status,
             "run_id": os.getenv("GITHUB_RUN_ID", row.get("run_id", "")),
             "product_interest": row.get("product_interest", ""),
             "ai_customer_fit": row.get("ai_customer_fit", ""),
             "ai_confidence": row.get("ai_confidence", ""),
             "source_url": row.get("source_url", ""),
         }
-        new_rows.append(outcome)
-        persist_outreach(existing + new_rows, fields)
+        existing.append(outcome)
+        persist_outreach(existing, fields)
+        if email_status == "sent":
+            sent_emails.add((row.get("email") or "").strip().lower())
+        if wa_status in {"sent", "queued"}:
+            done_whatsapp.add(re.sub(r"\D", "", wa_number))
         print(
             f"PRODUCT_OUTREACH_RESULT company={company[:100]} "
-            f"status={status} whatsapp=not_attempted_no_verified_whatsapp"
+            f"email_status={email_status} whatsapp_status={wa_status}"
         )
     if not queue:
         print("PRODUCT_OUTREACH: no lead met all automatic-send quality gates; no messages sent")
-
 
 def main():
     if os.getenv("OUTREACH_SOURCE", "social").strip().lower() == "product_web":
