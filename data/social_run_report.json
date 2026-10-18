@@ -1,18 +1,18 @@
 {
-  "run_id": "39046038188",
-  "started_at_utc": "2026-10-17T15:40:07.295424+00:00",
-  "finished_at_utc": "2026-10-17T15:40:21.746627+00:00",
-  "outcome": "no_new_candidates",
+  "run_id": "39112032757",
+  "started_at_utc": "2026-10-18T08:35:39.105089+00:00",
+  "finished_at_utc": "2026-10-18T08:37:29.998216+00:00",
+  "outcome": "completed",
   "platforms": [
     "facebook",
     "linkedin"
   ],
   "max_valid_leads_per_run": 3,
   "minimum_seconds_between_profile_enrichment_requests": 15.0,
-  "discovered_candidates_total": 0,
+  "discovered_candidates_total": 3,
   "discovered_candidates_by_platform": {
     "facebook": 0,
-    "linkedin": 0
+    "linkedin": 3
   },
   "new_qualified_leads_added": 0,
   "existing_social_records_checked": 9,
@@ -22,24 +22,69 @@
   "provider_counts": {
     "Apify": 0,
     "CloudflareDeepBackup": 0,
-    "failed": 0
+    "failed": 3
   },
   "cloudflare": {
     "token_configured": true,
-    "calls_used": 1,
+    "calls_used": 2,
     "per_run_cap": 2,
     "requests": [
       {
         "route": "/search",
         "platform": "facebook",
         "http_status": 200,
-        "elapsed_seconds": 0.27,
+        "elapsed_seconds": 2.58,
         "outcome": "success",
         "candidate_count": 0
+      },
+      {
+        "route": "/collect",
+        "platform": "linkedin",
+        "profile_url": "https://www.linkedin.com/company/united-refining-company",
+        "http_status": 200,
+        "elapsed_seconds": 2.51,
+        "outcome": "response_received",
+        "response_keys": [
+          "content",
+          "platform",
+          "profile",
+          "quota",
+          "service",
+          "success",
+          "url"
+        ]
       }
     ]
   },
-  "profile_fetch_results": [],
+  "profile_fetch_results": [
+    {
+      "platform": "linkedin",
+      "profile_url": "https://www.linkedin.com/company/united-refining-company",
+      "outcome": "provider_failed",
+      "errors": [
+        "CloudflareDeepBackup",
+        "Apify"
+      ]
+    },
+    {
+      "platform": "linkedin",
+      "profile_url": "https://www.linkedin.com/company/hsotrading",
+      "outcome": "provider_failed",
+      "errors": [
+        "CloudflareDeepBackup",
+        "Apify"
+      ]
+    },
+    {
+      "platform": "linkedin",
+      "profile_url": "https://www.linkedin.com/company/gccsupplyandtrading",
+      "outcome": "provider_failed",
+      "errors": [
+        "CloudflareDeepBackup",
+        "Apify"
+      ]
+    }
+  ],
   "personal_profiles_saved_this_run": 0,
   "notes": [
     "Public LinkedIn company pages, qualifying public LinkedIn personal profiles, and public Facebook pages only.",
