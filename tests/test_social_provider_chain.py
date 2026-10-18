@@ -309,9 +309,10 @@ class ProviderChainTests(unittest.TestCase):
             ["gemini-3.6-flash", "gemini-3.6-flash", "gemini-3.8-flash"],
         )
 
-    def test_irrelevant_apify_profile_does_not_use_cloudflare(self):
+    def test_irrelevant_apify_profile_is_retained_when_strict_filter_is_disabled(self):
         company_url = "https://www.linkedin.com/company/jiangsu-example-chemicals"
         with (
+            patch.dict("os.environ", {"SOCIAL_STRICT_RELEVANCE": "false"}),
             patch.object(social, "APIFY", "test-apify-token"),
             patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
             patch.object(social, "CLOUDFLARE_CALLS_THIS_RUN", 0),
@@ -325,9 +326,9 @@ class ProviderChainTests(unittest.TestCase):
         ):
             provider, data, errors = social.provider_chain("linkedin", company_url)
 
-        self.assertEqual(provider, "")
-        self.assertIsNone(data)
-        self.assertTrue(any("profile_not_relevant_to_target" in e for e in errors))
+        self.assertEqual(provider, "Apify")
+        self.assertEqual(data, {"name": "Example Chemicals"})
+        self.assertFalse(any("profile_not_relevant_to_target" in e for e in errors))
         cf.assert_not_called()
 
     def test_canonical_linkedin_url_normalizes_regional_hosts(self):
