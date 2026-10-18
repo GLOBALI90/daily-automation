@@ -54,7 +54,7 @@ on:
         type: boolean
         default: false
 
-  # Run every three hours; outreach remains disabled unless explicitly enabled on manual dispatch.
+  # Workflow checks every three hours; product discovery is budget-paced to every third scheduled run.
   schedule:
     - cron: "0 */3 * * *"
 
