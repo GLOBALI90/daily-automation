@@ -18,7 +18,7 @@ TARGET_MARKET = os.getenv("TARGET_MARKET", "China").strip() or "China"
 
 def infer_buyer_types(product):
     """Infer the best-fit B2B customer roles from the selected product/sector."""
-    value = val(product).lower()
+    value = str(product or "").strip().lower()
     petroleum = ("petroleum", "crude oil", "fuel oil", "gasoline", "diesel", "jet fuel",
                  "kerosene", "lpg", "lng", "bitumen", "asphalt", "base oil", "lubricant",
                  "grease", "hydraulic oil", "gear oil", "compressor oil", "turbine oil",
