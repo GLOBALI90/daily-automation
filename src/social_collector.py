@@ -2002,6 +2002,65 @@ def run_product_web_collection():
             raise RuntimeError("Firecrawl product search returned an unsuccessful response")
         items = find_result_items(payload.get("data") or payload.get("results") or payload)
 
+    # Use the already-configured Exa key as a bounded secondary discovery source.
+    # Its shared monthly counter caps this fallback at 20 searches across modes.
+    exa_candidates_added = 0
+    if EXA_API_KEY and _reserve_exa_search_call():
+        exa_query = (
+            f'B2B customers in {TARGET_MARKET} that buy or use "{PRODUCT_NAME}". '
+            f'Prioritize {BUYER_TYPES}, procurement teams, and industrial end-users. '
+            'Find actual companies and official websites, not market reports or product suppliers.'
+        )
+        try:
+            exa_response = session.post(
+                "https://api.exa.ai/search",
+                headers={
+                    "x-api-key": EXA_API_KEY,
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "query": exa_query,
+                    "type": "auto",
+                    "numResults": 5,
+                    "contents": {"highlights": True},
+                },
+                timeout=25,
+            )
+            exa_response.raise_for_status()
+            exa_payload = exa_response.json()
+            existing_urls = {
+                val(item.get("url")).split("#", 1)[0].rstrip("/")
+                for item in items if isinstance(item, dict) and val(item.get("url"))
+            }
+            for result in (exa_payload.get("results") or []):
+                if not isinstance(result, dict):
+                    continue
+                result_url = val(result.get("url")).split("#", 1)[0].rstrip("/")
+                if not result_url or result_url in existing_urls:
+                    continue
+                highlights = result.get("highlights") or []
+                if isinstance(highlights, list):
+                    description = " ".join(val(value) for value in highlights if val(value))
+                else:
+                    description = val(highlights)
+                description = description or val(result.get("text") or result.get("summary"))
+                items.append({
+                    "url": result_url,
+                    "title": val(result.get("title")),
+                    "description": description,
+                    "content": description,
+                    "search_provider": "Exa Search API",
+                })
+                existing_urls.add(result_url)
+                exa_candidates_added += 1
+            print(
+                f"EXA_PRODUCT_SEARCH results={len(exa_payload.get('results') or [])}; "
+                f"unique_candidates_added={exa_candidates_added}"
+            )
+        except Exception as exc:
+            print(f"EXA_PRODUCT_SEARCH failed safely: {type(exc).__name__}")
+
     email_re = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
     phone_re = re.compile(r"(?<!\w)(?:\+?\d[\d ().-]{7,}\d)")
 
@@ -2141,6 +2200,7 @@ def run_product_web_collection():
             "searches_used": FIRECRAWL_SEARCHES_THIS_RUN,
             "per_run_search_cap": MAX_FIRECRAWL_SEARCHES_PER_RUN,
             "search_result_count": len(items),
+            "exa_candidates_added": exa_candidates_added,
             "response_keys": sorted(payload.keys()),
             "result_payload_type": type(payload.get("data")).__name__,
             "result_container_keys": sorted(payload.get("data").keys()) if isinstance(payload.get("data"), dict) else [],
