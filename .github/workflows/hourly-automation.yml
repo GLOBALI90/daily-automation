@@ -3,6 +3,29 @@ name: ROZHAN Hourly Automation
 on:
   workflow_dispatch:
     inputs:
+      collection_mode:
+        description: "Choose product-web customer discovery or legacy social-page collection"
+        required: true
+        type: choice
+        options:
+          - product_web
+          - social
+        default: product_web
+      product_name:
+        description: "Product to find prospective business customers for"
+        required: true
+        type: string
+        default: "industrial lubricants"
+      target_market:
+        description: "Target country or market for prospective customers"
+        required: true
+        type: string
+        default: "China"
+      buyer_types:
+        description: "Customer types to prioritize, comma-separated"
+        required: true
+        type: string
+        default: "manufacturers, importers, distributors, industrial end-users"
       social_platform:
         description: "Collect public pages from the selected networks; save relevant LinkedIn people as account-only records"
         required: false
@@ -31,9 +54,9 @@ on:
         type: boolean
         default: false
 
-  # Four scheduled runs per UTC week to keep outbound WhatsApp usage conservative.
+  # Run every three hours; outreach remains disabled unless explicitly enabled on manual dispatch.
   schedule:
-    - cron: "0 9 * * 1,3,5,0"
+    - cron: "0 */3 * * *"
 
 permissions:
   contents: write
@@ -65,9 +88,20 @@ jobs:
       - name: Test social provider fallback and response quality
         run: python -m unittest discover -s tests -v
 
-      - name: Collect public social leads (Apify for LinkedIn, Cloudflare for Facebook, Exa backup)
+      - name: Collect product customers (bounded direct Firecrawl) or social leads
         if: ${{ !inputs.validation_only }}
         env:
+          PRODUCT_NAME: ${{ inputs.product_name || 'industrial lubricants' }}
+          TARGET_MARKET: ${{ inputs.target_market || 'China' }}
+          BUYER_TYPES: ${{ inputs.buyer_types || 'manufacturers, importers, distributors, industrial end-users' }}
+          COLLECTION_MODE: ${{ inputs.collection_mode || 'product_web' }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.6-flash' }}
+          COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
+          COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID: ${{ vars.COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID || 'firecrawl_eurite-sext' }}
+          COMPOSIO_USER_ID: 'GLOBALI90'
+          CLOUDFLARE_PRIMARY_ENRICHMENT: 'true'
           APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
           EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
           SOCIAL_DEEP_BACKUP_TOKEN: ${{ secrets.SOCIAL_DEEP_BACKUP_TOKEN }}
@@ -77,8 +111,8 @@ jobs:
           SOCIAL_REQUEST_INTERVAL_SECONDS: '15'
         run: python src/social_collector.py
 
-      - name: Generate outreach drafts (delivery controlled by outreach_enabled; max five leads per run)
-        if: ${{ !inputs.validation_only }}
+      - name: Generate outreach drafts (social mode only; delivery requires explicit opt-in)
+        if: ${{ !inputs.validation_only && inputs.collection_mode == 'social' && inputs.outreach_enabled }}
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.6-flash' }}
@@ -90,7 +124,7 @@ jobs:
         run: python src/process_leads.py
 
       - name: Save results
-        if: ${{ always() && !inputs.validation_only }}
+        if: ${{ always() && !inputs.validation_only && github.ref == 'refs/heads/main' }}
         run: |
           git config user.name "rozhanglobal-automation"
           git config user.email "actions@users.noreply.github.com"
@@ -113,5 +147,6 @@ jobs:
           path: |
             data/social_run_report.json
             data/personal_profiles.csv
+            data/product_leads.csv
           if-no-files-found: warn
           retention-days: 14

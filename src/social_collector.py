@@ -11,8 +11,12 @@ PERSONAL_PROFILES = DATA / "personal_profiles.csv"
 PERSONAL_PROFILE_FIELDS = ["platform", "public_name", "profile_url", "username", "run_id", "collected_at"]
 DATA.mkdir(exist_ok=True)
 
-# Pilot scope: Chinese industrial-lubricant manufacturers only.
-# Keep Worker enrichment to two calls per run, below its four-actions/day allowance.
+# Product-first lead discovery. Defaults preserve the existing lubricant/China pilot.
+PRODUCT_NAME = os.getenv("PRODUCT_NAME", "industrial lubricants").strip() or "industrial lubricants"
+TARGET_MARKET = os.getenv("TARGET_MARKET", "China").strip() or "China"
+BUYER_TYPES = os.getenv(
+    "BUYER_TYPES", "manufacturers, importers, distributors, industrial end-users"
+).strip() or "manufacturers, importers, distributors, industrial end-users"
 MAX_ITEMS = min(5, max(1, int(os.getenv("SOCIAL_MAX_ITEMS", "3") or "3")))
 REQUEST_INTERVAL_SECONDS = max(11.0, float(os.getenv("SOCIAL_REQUEST_INTERVAL_SECONDS", "15") or "15"))
 LAST_PROFILE_REQUEST_AT = 0.0
@@ -25,9 +29,30 @@ CLOUDFLARE_AUDIT = []
 PROFILE_AUDIT = []
 DISCOVERY_COUNTS = {}
 CLOUDFLARE_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
+COMPOSIO_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
+COMPOSIO_AUDIT = []
+COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
+FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "").strip()
+COLLECTION_MODE = os.getenv("COLLECTION_MODE", "social").strip().lower()
+PRODUCT_LEADS = DATA / "product_leads.csv"
+PRODUCT_LEAD_FIELDS = [
+    "company_name", "website", "country", "buyer_type", "product_interest",
+    "email", "phone", "source_url", "evidence", "verification_status",
+    "ai_customer_fit", "ai_confidence", "ai_recommended_buyer_type",
+    "ai_reason", "ai_review_status", "run_id", "collected_at"
+]
+FIRECRAWL_SEARCHES_THIS_RUN = 0
+MAX_FIRECRAWL_SEARCHES_PER_RUN = 1
+FIRECRAWL_SCRAPES_THIS_RUN = 0
+MAX_FIRECRAWL_SCRAPES_PER_RUN = 1
+GITHUB_RUN_NUMBER = int(os.getenv("GITHUB_RUN_NUMBER", "0") or "0")
+COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID = os.getenv("COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID", "").strip()
+COMPOSIO_USER_ID = os.getenv("COMPOSIO_USER_ID", "GLOBALI90").strip()
+CLOUDFLARE_PRIMARY_ENRICHMENT = os.getenv("CLOUDFLARE_PRIMARY_ENRICHMENT", "false").strip().lower() in ("1", "true", "yes", "on")
+COMPOSIO_EXECUTE_URL = "https://backend.composio.dev/api/v3.1/tools/execute/FIRECRAWL_SEARCH"
 CLOUDFLARE_PRIMARY_QUERY = (
-    "China industrial lubricant manufacturer factory lubricating oil industrial grease "
-    "中国 工业润滑油 润滑脂 生产厂家"
+    f'"{PRODUCT_NAME}" {BUYER_TYPES} {TARGET_MARKET} company contact website '
+    f'"{PRODUCT_NAME}" {TARGET_MARKET} supplier importer distributor'
 )
 EXISTING_SOCIAL_KEYS = set()
 EXISTING_PERSONAL_KEYS = set()
@@ -158,6 +183,13 @@ INDUSTRY_TERMS = (
     "润滑油", "工业润滑油", "润滑脂", "工业润滑脂", "润滑剂",
     "润滑油厂家", "润滑油生产", "润滑油制造商", "润滑脂生产厂家"
 )
+# Keep the detailed legacy synonym set for the default pilot; arbitrary products
+# use their supplied phrase and meaningful tokens instead of lubricant-only gates.
+if PRODUCT_NAME.lower() in ("industrial lubricants", "industrial lubricant", "lubricating oil"):
+    PRODUCT_TERMS = INDUSTRY_TERMS
+else:
+    _product_tokens = [token for token in re.findall(r"[a-zA-Z0-9\u4e00-\u9fff]+", PRODUCT_NAME.lower()) if len(token) > 2]
+    PRODUCT_TERMS = tuple(dict.fromkeys([PRODUCT_NAME.lower(), *_product_tokens]))
 COMPANY_TERMS = (
     "company", "group", "limited", "ltd", "manufacturer", "manufacturing",
     "factory", "supplier", "production", "importer", "exporter", "refinery",
@@ -183,18 +215,31 @@ CHINA_SIGNALS = (
     "cangzhou", "dalian", "shenyang", "yingkou", "xiamen", "quanzhou",
     "fuzhou", "wuhan", "yichang"
 )
+MARKET_SIGNALS = (
+    CHINA_SIGNALS if TARGET_MARKET.lower() in ("china", "cn", "中国")
+    else tuple(dict.fromkeys(
+        [TARGET_MARKET.lower(), *[part for part in re.findall(r"[a-zA-Z0-9]+", TARGET_MARKET.lower()) if len(part) > 2]]
+    ))
+)
+BUYER_TYPE_TERMS = tuple(
+    dict.fromkeys(
+        [part.strip().lower() for part in re.split(r"[,;|]", BUYER_TYPES) if part.strip()]
+        + ["manufacturer", "manufacturing", "factory", "producer", "supplier", "importer", "distributor",
+           "wholesaler", "industrial end-user", "procurement", "purchasing", "采购", "生产厂家"]
+    )
+)
 PRIORITY_REGION_SIGNALS = ("jiangsu", "suzhou", "nanjing", "wuxi", "changzhou", "nantong")
 
 
 def infer_social_industry(company, website, location, bio):
     text = " ".join([company, website, location, bio]).lower()
-    if any(term in text for term in INDUSTRY_TERMS):
-        return "industrial lubricants"
+    if any(term in text for term in PRODUCT_TERMS):
+        return PRODUCT_NAME
     return ""
 
 
 def relevant_social_profile(platform, url, company, website, location, bio):
-    """Accept only China-based industrial-lubricant manufacturers and producers."""
+    """Accept product-relevant public social pages in the configured target market."""
     text = " ".join([url, company, website, location, bio]).lower()
     location_text = val(location).lower()
     if not company or company.lower() in {"unknown", "none", "n/a", "facebook", "linkedin"}:
@@ -208,32 +253,28 @@ def relevant_social_profile(platform, url, company, website, location, bio):
         "singapore", "australia", "canada", "pakistan", "bangladesh",
         "saudi arabia", "united arab emirates", "turkey", "mexico",
     )
-    if any(signal in location_text for signal in non_china_locations):
+    if TARGET_MARKET.lower() in ("china", "cn", "中国") and any(signal in location_text for signal in non_china_locations):
         return False
-    china_match = any(signal in text for signal in CHINA_SIGNALS) or domain(url).endswith(".cn")
-    if not china_match:
+    market_match = any(signal in text for signal in MARKET_SIGNALS)
+    if TARGET_MARKET.lower() in ("china", "cn", "中国"):
+        market_match = market_match or domain(url).endswith(".cn")
+    if not market_match:
         return False
-    lubricant_match = any(term in text for term in INDUSTRY_TERMS)
-    producer_match = any(term in text for term in (
-        "factory", "manufacturer", "manufacturing", "producer", "production",
-        "blending plant", "lubricant plant", "industrial plant",
-        "工厂", "生产厂家", "制造厂", "制造商", "生产企业", "调和厂"
-    ))
-    return lubricant_match and producer_match
+    product_match = any(term in text for term in PRODUCT_TERMS)
+    buyer_match = any(term in text for term in BUYER_TYPE_TERMS)
+    return product_match and buyer_match
 
 
 NATIVE_QUERIES = {
     "linkedin": [
-        # Role-led searches can surface public post authors who are buyers or decision-makers.
-        'China industrial lubricant procurement manager',
-        'Jiangsu lubricating oil purchasing manager',
-        'China industrial lubricant manufacturer factory lubricating oil producer',
-        '中国 工业润滑油 采购经理 生产厂家',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" {BUYER_TYPES} company',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" procurement purchasing sourcing',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" supplier importer distributor',
     ],
     "facebook": [
-        'China industrial lubricant factory manufacturer lubricating oil producer',
-        'Chinese industrial grease hydraulic oil lubricant blending plant',
-        '中国 工业润滑油 润滑脂 生产厂家',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" {BUYER_TYPES}',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" company website contact',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" supplier importer distributor',
     ],
 }
 
@@ -297,9 +338,8 @@ def _facebook_native_candidates(query):
         return []
     FACEBOOK_GOOGLE_SEARCH_USED_THIS_RUN = True
     google_query = (
-        'site:facebook.com ("industrial lubricant" OR "lubricating oil" OR '
-        '"industrial grease" OR 润滑油 OR 润滑脂) '
-        '(China OR Chinese OR 中国) (manufacturer OR factory OR 生产厂家)'
+        f'site:facebook.com "{PRODUCT_NAME}" "{TARGET_MARKET}" '
+        f'({BUYER_TYPES}) company website contact'
     )
     google_data = _scrapecreators_get(
         "/v1/google/search", {"query": google_query, "region": "CN", "page": 1}
@@ -713,9 +753,9 @@ def personal_profile_candidate_score(result, url):
         val(result.get("headline")), val(result.get("current_company")),
         val(result.get("location")), url
     ]).lower()
-    if not any(term in text for term in INDUSTRY_TERMS):
+    if not any(term in text for term in PRODUCT_TERMS):
         return 0
-    if not any(term in text for term in CHINA_SIGNALS):
+    if not any(term in text for term in MARKET_SIGNALS):
         return 0
     # A role mentioned only in a post can describe somebody else. Require the
     # buyer/decision-maker evidence in public author identity metadata instead.
@@ -725,7 +765,7 @@ def personal_profile_candidate_score(result, url):
     ]).lower()
     if not any(term in role_text for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS):
         return 0
-    return 10 + sum(1 for term in CHINA_SIGNALS if term in text) + sum(
+    return 10 + sum(1 for term in MARKET_SIGNALS if term in text) + sum(
         1 for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS if term in role_text
     )
 
@@ -763,17 +803,13 @@ def social_candidate_score(platform, result, url):
     text = " ".join([title, snippet, url]).lower()
     if platform == "linkedin" and urlparse(url).path.lower().startswith("/in/"):
         return personal_profile_candidate_score(result, url)
-    lubricant_hits = sum(1 for term in INDUSTRY_TERMS if term in text)
-    producer_hits = sum(1 for term in (
-        "factory", "manufacturer", "manufacturing", "producer", "production",
-        "blending plant", "工厂", "生产厂家", "制造厂", "制造商", "生产企业", "调和厂"
-    ) if term in text)
-    china_hits = sum(1 for term in CHINA_SIGNALS if term in text)
-    # Strict pilot gate: require evidence of all three dimensions in the
-    # candidate itself; a search query alone is never evidence.
-    if not lubricant_hits or not producer_hits or not china_hits:
+    lubricant_hits = sum(1 for term in PRODUCT_TERMS if term in text)
+    buyer_hits = sum(1 for term in BUYER_TYPE_TERMS if term in text)
+    market_hits = sum(1 for term in MARKET_SIGNALS if term in text)
+    # Require product, buyer-type and target-market evidence in the candidate itself.
+    if not lubricant_hits or not buyer_hits or not market_hits:
         return 0
-    return lubricant_hits * 5 + producer_hits * 3 + china_hits * 2
+    return lubricant_hits * 5 + buyer_hits * 3 + market_hits * 2
 
 
 def pace_cloudflare_request():
@@ -863,15 +899,187 @@ def cloudflare_search_candidates(platform, query):
     return candidates
 
 
+def _resolve_composio_firecrawl_account():
+    """Resolve the real Composio REST account ID and owning user for Firecrawl."""
+    if not COMPOSIO_API_KEY:
+        raise RuntimeError("COMPOSIO_API_KEY missing")
+    response = session.get(
+        "https://backend.composio.dev/api/v3.1/connected_accounts",
+        headers={"x-api-key": COMPOSIO_API_KEY, "Accept": "application/json"},
+        params={"account_type": "ALL", "limit": 100},
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    data = payload.get("data", payload) if isinstance(payload, dict) else {}
+    accounts = []
+    if isinstance(data, list):
+        accounts = data
+    elif isinstance(data, dict):
+        for key in ("items", "connected_accounts", "connectedAccounts", "results"):
+            if isinstance(data.get(key), list):
+                accounts = data[key]
+                break
+        if not accounts and isinstance(data.get("items"), dict):
+            accounts = data["items"].get("data", []) or []
+
+    active = []
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        toolkit = account.get("toolkit") or account.get("app") or {}
+        slug = val(
+            toolkit.get("slug") if isinstance(toolkit, dict) else toolkit
+        ) or val(account.get("toolkit_slug") or account.get("app_slug"))
+        status = val(account.get("status")).upper()
+        if slug.lower() != "firecrawl" or status not in ("ACTIVE", "CONNECTED", "ENABLED"):
+            continue
+        account_id = val(account.get("id") or account.get("connected_account_id"))
+        if not account_id:
+            continue
+        owner_id = val(
+            account.get("user_id") or account.get("userId")
+            or account.get("entity_id") or account.get("entityId")
+        )
+        active.append({
+            "id": account_id,
+            "user_id": owner_id,
+            "is_default": bool(account.get("is_default") or account.get("isDefault")),
+        })
+
+    if not active:
+        keys = sorted(payload.keys()) if isinstance(payload, dict) else []
+        diagnostics = []
+        for account in accounts[:10]:
+            if not isinstance(account, dict):
+                diagnostics.append({"type": type(account).__name__})
+                continue
+            toolkit = account.get("toolkit") or account.get("app") or {}
+            diagnostics.append({
+                "keys": sorted(account.keys()),
+                "status": val(account.get("status") or (account.get("state") or {}).get("status") if isinstance(account.get("state"), dict) else account.get("status")),
+                "toolkit": val(toolkit.get("slug") or toolkit.get("name") or toolkit.get("id")) if isinstance(toolkit, dict) else val(toolkit),
+                "toolkit_slug": val(account.get("toolkit_slug") or account.get("app_slug") or account.get("appName")),
+                "id_present": bool(account.get("id") or account.get("connected_account_id")),
+                "owner_present": bool(account.get("user_id") or account.get("userId") or account.get("entity_id") or account.get("entityId")),
+            })
+        raise RuntimeError(
+            "No active Firecrawl REST connected account found in this Composio API-key project "
+            f"(total_items={payload.get('total_items', 'unknown') if isinstance(payload, dict) else 'unknown'}; "
+            f"response_keys={keys}; account_diagnostics={json.dumps(diagnostics, ensure_ascii=False)})"
+        )
+
+    configured = COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID
+    selected = next((item for item in active if item["id"] == configured), None)
+    if selected is None:
+        selected = next((item for item in active if item["is_default"]), active[0])
+        print(
+            "COMPOSIO_ACCOUNT_ALIAS_NOT_REST_ID: using resolved active Firecrawl account; "
+            f"active_accounts={len(active)}"
+        )
+    if not selected["user_id"]:
+        selected["user_id"] = COMPOSIO_USER_ID
+    return selected
+
+
+def composio_search_candidates(platform, query):
+    """Primary discovery via Composio's Firecrawl Search tool."""
+    if not COMPOSIO_API_KEY:
+        raise RuntimeError("COMPOSIO_API_KEY missing")
+    if platform not in ("linkedin", "facebook"):
+        return []
+
+    domain_filter = "linkedin.com/company" if platform == "linkedin" else "facebook.com"
+    search_query = (
+        f'site:{domain_filter} "{PRODUCT_NAME}" "{TARGET_MARKET}" '
+        f'({BUYER_TYPES}) company website contact'
+    )
+    # Resolve the actual REST connected-account ID and its owning user.
+    # The MCP alias in GitHub Secrets is not necessarily the REST account ID.
+    account = _resolve_composio_firecrawl_account()
+    body = {
+        "user_id": account["user_id"],
+        "connected_account_id": account["id"],
+        "arguments": {
+            "q": search_query,
+            "limit": min(10, max(3, MAX_ITEMS * 3)),
+            "formats": ["markdown"],
+        },
+    }
+
+    started = time.monotonic()
+    response = session.post(
+        COMPOSIO_EXECUTE_URL,
+        headers={"x-api-key": COMPOSIO_API_KEY, "Accept": "application/json", "Content-Type": "application/json"},
+        json=body,
+        timeout=75,
+    )
+    if response.status_code >= 400:
+        COMPOSIO_AUDIT.append({"platform": platform, "http_status": response.status_code, "outcome": "http_error"})
+        raise RuntimeError(f"composio_firecrawl_http_{response.status_code}:{response.text[:250]}")
+    payload = response.json()
+    if isinstance(payload, dict) and (payload.get("successful") is False or payload.get("error")):
+        raise RuntimeError("composio_firecrawl_tool_error:" + val(payload.get("error") or payload.get("message"))[:250])
+
+    candidates, seen = [], set()
+    def visit(node):
+        if isinstance(node, dict):
+            url = val(node.get("url") or node.get("link") or node.get("sourceURL"))
+            title = val(node.get("title") or node.get("name"))
+            content = val(node.get("markdown") or node.get("description") or node.get("snippet") or node.get("content") or node.get("text"))
+            if url.startswith(("https://", "http://")) and url not in seen and good(platform, url):
+                path = urlparse(url).path.lower()
+                if platform != "linkedin" or path.startswith("/company/"):
+                    if platform != "facebook" or not any(part in path for part in ("/posts/", "/photos/", "/videos/", "/reel/", "/watch", "/groups/", "/events/", "/marketplace/", "/login")):
+                        seen.add(url)
+                        candidates.append({
+                            "url": url.split("#", 1)[0].rstrip("/"),
+                            "title": title,
+                            "content": content[:5000],
+                            "search_provider": "Composio Firecrawl Search",
+                            "platform": platform,
+                        })
+            for value in node.values():
+                if isinstance(value, (dict, list)):
+                    visit(value)
+        elif isinstance(node, list):
+            for value in node:
+                visit(value)
+
+    visit(payload)
+    COMPOSIO_AUDIT.append({
+        "platform": platform, "http_status": response.status_code,
+        "elapsed_seconds": round(time.monotonic() - started, 2),
+        "outcome": "success", "candidate_count": len(candidates),
+    })
+    print(
+        f"COMPOSIO_FIRECRAWL_PRIMARY platform={platform}; http_status={response.status_code}; "
+        f"candidates={len(candidates)}; elapsed_seconds={COMPOSIO_AUDIT[-1]['elapsed_seconds']}"
+    )
+    return candidates
+
+
 def discover(p):
-    """Use Cloudflare public search first, then supplement with native search."""
+    """Use Composio Firecrawl first, then bounded backup providers."""
     global DUPLICATE_PREFILTER_SKIPPED
     last_error = None
     ranked_by_url = {}
     personal_by_url = {}
 
-    # Cloudflare is the primary discovery source. Candidate URLs are provisional
-    # until profile enrichment confirms the China/manufacturer requirements.
+    # Composio candidates have first priority; Cloudflare search results remain a backup.
+    for item in COMPOSIO_PRIMARY_RESULTS.get(p, []):
+        u = val(item.get("url")).rstrip("/")
+        if not u or not good(p, u):
+            continue
+        if is_existing_candidate(p, u):
+            DUPLICATE_PREFILTER_SKIPPED += 1
+            print(f"Skipping previously stored Composio candidate before enrichment: platform={p}; url={u}")
+            continue
+        is_personal = p == "linkedin" and urlparse(u).path.lower().startswith("/in/")
+        target = personal_by_url if is_personal else ranked_by_url
+        target[u] = (1000, u, CLOUDFLARE_PRIMARY_QUERY, "composio_firecrawl_search_primary")
+
+    # Cloudflare search is a secondary discovery source; enrichment remains the Worker stage.
     for item in CLOUDFLARE_PRIMARY_RESULTS.get(p, []):
         u = val(item.get("url")).rstrip("/")
         if not u or not good(p, u):
@@ -1139,20 +1347,25 @@ def pace_profile_enrichment(platform):
 def provider_chain(p, url):
     errors = []
 
-    # Active production routes are deliberately separated by network:
-    # Apify handles LinkedIn company pages; Cloudflare handles Facebook pages.
-    if p == "linkedin":
-        if not APIFY:
-            return "", None, ["Apify:APIFY_API_TOKEN missing"]
-        providers = [("Apify", lambda: apify_profile(p, url))]
-    elif p == "facebook":
-        if not CLOUDFLARE_TOKEN:
-            return "", None, ["CloudflareDeepBackup:SOCIAL_DEEP_BACKUP_TOKEN missing"]
-        if CLOUDFLARE_CALLS_THIS_RUN >= MAX_CLOUDFLARE_CALLS_PER_RUN:
-            return "", None, ["CloudflareDeepBackup:cloudflare_per_run_cap_reached"]
-        providers = [("CloudflareDeepBackup", lambda: cloudflare_profile(p, url))]
-    else:
+    # Cloudflare performs the first profile/contact enrichment attempt when enabled.
+    # Apify is a backup for LinkedIn; the Worker action cap is always respected.
+    if p not in ("linkedin", "facebook"):
         return "", None, [f"unsupported_platform:{p}"]
+
+    providers = []
+    if CLOUDFLARE_TOKEN and CLOUDFLARE_PRIMARY_ENRICHMENT:
+        if CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+            providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
+        else:
+            errors.append("CloudflareDeepBackup:cloudflare_per_run_cap_reached")
+    elif p == "facebook" and CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+        providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
+
+    if p == "linkedin" and APIFY:
+        providers.append(("Apify", lambda: apify_profile(p, url)))
+    if not providers:
+        errors.append("no_profile_provider_available_or_worker_cap_reached")
+        return "", None, errors
 
     for name, fn in providers:
         try:
@@ -1535,6 +1748,7 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "outcome": outcome,
         "discovered_candidates": discovered,
         "new_qualified_leads_added": added,
+        "composio_requests": COMPOSIO_AUDIT,
         "cloudflare_calls": CLOUDFLARE_CALLS_THIS_RUN,
         "cloudflare_requests": [
             {k: v for k, v in item.items() if k != "profile_url"}
@@ -1543,7 +1757,305 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
     }, ensure_ascii=False), flush=True)
 
 
+
+def qualify_product_lead_with_ai(row):
+    """Use the already-configured Gemini integration to assess B2B customer fit.
+
+    This only classifies public evidence; it never contacts a prospect or invents
+    missing facts. A failed/missing AI provider leaves the lead pending review.
+    """
+    key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not key:
+        print("GEMINI_PRODUCT_QUALIFICATION skipped: GEMINI_API_KEY missing")
+        return {
+            "ai_customer_fit": "unknown",
+            "ai_confidence": "0",
+            "ai_recommended_buyer_type": "",
+            "ai_reason": "AI key not configured; manual review required",
+            "ai_review_status": "pending_manual_review",
+        }
+    try:
+        from gemini_utils import generate_text
+        prompt = f"""You qualify potential B2B customers for an international trade company.
+Assess whether this organization is plausibly a real business customer for the specified product in the specified market.
+Do not assume that a supplier/manufacturer is a buyer; distinguish likely buyers, distributors/importers, manufacturers who may consume the product, and irrelevant organizations.
+Use only the evidence below. If evidence is thin or only a search snippet, say so. Never invent contact details or company facts.
+Target product: {row.get('product_interest', '')}
+Target country/market: {row.get('country', '')}
+Buyer types of interest: {row.get('buyer_type', '')}
+Company/result title: {row.get('company_name', '')}
+Website: {row.get('website', '')}
+Source URL: {row.get('source_url', '')}
+Public evidence: {row.get('evidence', '')[:2200]}
+
+Return ONLY valid JSON with these keys:
+{{"fit":"likely_customer|possible_customer|supplier_only|irrelevant|uncertain","confidence":0,"recommended_buyer_type":"short label or empty","reason":"one concise evidence-based sentence","needs_manual_review":true}}
+Confidence must be an integer from 0 to 100. Set needs_manual_review true whenever evidence is incomplete.
+"""
+        model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
+        raw = generate_text(prompt, api_key=key, model=model)
+        match = re.search(r"\{[\s\S]*\}", raw or "")
+        if not match:
+            raise ValueError("Gemini response was not JSON")
+        result = json.loads(match.group(0))
+        allowed = {"likely_customer", "possible_customer", "supplier_only", "irrelevant", "uncertain"}
+        fit = val(result.get("fit")).lower()
+        if fit not in allowed:
+            fit = "uncertain"
+        try:
+            confidence = max(0, min(100, int(result.get("confidence", 0))))
+        except (TypeError, ValueError):
+            confidence = 0
+        reason = val(result.get("reason"))[:500]
+        review = bool(result.get("needs_manual_review", True)) or confidence < 75 or fit in {"uncertain", "possible_customer"}
+        return {
+            "ai_customer_fit": fit,
+            "ai_confidence": str(confidence),
+            "ai_recommended_buyer_type": val(result.get("recommended_buyer_type"))[:120],
+            "ai_reason": reason or "AI provided no explanation; manual review required",
+            "ai_review_status": "pending_manual_review" if review else "ai_screened_review_before_outreach",
+        }
+    except Exception as exc:
+        print(f"GEMINI_PRODUCT_QUALIFICATION failed safely: {type(exc).__name__}")
+        return {
+            "ai_customer_fit": "unknown",
+            "ai_confidence": "0",
+            "ai_recommended_buyer_type": "",
+            "ai_reason": "AI qualification failed; manual review required",
+            "ai_review_status": "pending_manual_review",
+        }
+
+
+def run_product_web_collection():
+    """Collect product-specific business prospects using one bounded Firecrawl search.
+
+    This mode intentionally does not scrape result pages yet: search-only costs
+    2 credits per 10 results, keeping the scheduled three-hour workflow within
+    a conservative free-tier budget. Contact fields are filled only when the
+    public search result itself contains them.
+    """
+    global FIRECRAWL_SEARCHES_THIS_RUN, FIRECRAWL_SCRAPES_THIS_RUN
+    if not FIRECRAWL_API_KEY:
+        raise RuntimeError("FIRECRAWL_API_KEY missing; product_web mode fails closed")
+
+    rows = []
+    if PRODUCT_LEADS.exists():
+        with PRODUCT_LEADS.open(encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    seen_domains = {
+        domain(val(row.get("website") or row.get("source_url")))
+        for row in rows if val(row.get("website") or row.get("source_url"))
+    }
+
+    # Use one compact query; the product, market and buyer type remain configurable.
+    query = f'{PRODUCT_NAME} manufacturers companies in {TARGET_MARKET}'
+
+    def find_result_items(node):
+        if isinstance(node, list):
+            direct = [item for item in node if isinstance(item, dict) and val(item.get("url"))]
+            if direct:
+                return direct
+            for child in node:
+                found = find_result_items(child)
+                if found:
+                    return found
+        elif isinstance(node, dict):
+            for key in ("web", "results", "items", "organic", "searchResults", "data"):
+                child = node.get(key)
+                found = find_result_items(child)
+                if found:
+                    return found
+            for child in node.values():
+                if isinstance(child, (dict, list)):
+                    found = find_result_items(child)
+                    if found:
+                        return found
+        return []
+
+    # Composio is the primary discovery route. Direct Firecrawl is the bounded
+    # fallback when the Composio project has no usable Firecrawl connection/results.
+    payload = {}
+    items = []
+    search_provider = "Composio Firecrawl"
+    composio_error = ""
+    if COMPOSIO_API_KEY:
+        try:
+            account = _resolve_composio_firecrawl_account()
+            composio_response = session.post(
+                COMPOSIO_EXECUTE_URL,
+                headers={"x-api-key": COMPOSIO_API_KEY, "Accept": "application/json", "Content-Type": "application/json"},
+                json={
+                    "user_id": account["user_id"],
+                    "connected_account_id": account["id"],
+                    "arguments": {"q": query, "limit": 10, "formats": ["markdown"]},
+                },
+                timeout=75,
+            )
+            composio_response.raise_for_status()
+            payload = composio_response.json()
+            if isinstance(payload, dict) and payload.get("successful") is False:
+                raise RuntimeError("Composio Firecrawl Search returned successful=false")
+            items = find_result_items(payload.get("data") or payload)
+            print(f"COMPOSIO_PRODUCT_SEARCH results={len(items)}")
+        except Exception as exc:
+            composio_error = f"{type(exc).__name__}: {exc}"
+            print(f"COMPOSIO_PRODUCT_SEARCH failed; trying bounded direct Firecrawl fallback: {composio_error}")
+            items = []
+
+    if not items:
+        search_provider = "Direct Firecrawl fallback"
+        if not FIRECRAWL_API_KEY:
+            raise RuntimeError("No usable Composio product results and FIRECRAWL_API_KEY missing")
+        if FIRECRAWL_SEARCHES_THIS_RUN >= MAX_FIRECRAWL_SEARCHES_PER_RUN:
+            print("FIRECRAWL_PRODUCT_SEARCH blocked: per_run_cap_reached")
+            return
+        FIRECRAWL_SEARCHES_THIS_RUN += 1
+        response = session.post(
+            "https://api.firecrawl.dev/v2/search",
+            headers={
+                "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json={"query": query, "limit": 10},
+            timeout=45,
+        )
+        if response.status_code == 402:
+            print("FIRECRAWL_PRODUCT_SEARCH stopped: credit_limit_reached_http_402; no retries")
+            return
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get("success") is False:
+            raise RuntimeError("Firecrawl product search returned an unsuccessful response")
+        items = find_result_items(payload.get("data") or payload.get("results") or payload)
+
+    email_re = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
+    phone_re = re.compile(r"(?<!\w)(?:\+?\d[\d ().-]{7,}\d)")
+    excluded_hosts = (
+        "facebook.com", "linkedin.com", "instagram.com", "tiktok.com",
+        "youtube.com", "x.com", "twitter.com", "wikipedia.org",
+        "crunchbase.com", "zoominfo.com", "apollo.io", "yellowpages.com",
+    )
+    added = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        url = val(item.get("url")).split("#", 1)[0].rstrip("/")
+        host = domain(url)
+        if not url.startswith(("https://", "http://")) or not host:
+            continue
+        if any(host == blocked or host.endswith("." + blocked) for blocked in excluded_hosts):
+            continue
+        title = val(item.get("title"))
+        path = urlparse(url).path.lower()
+        # Reject obvious listicles/directories rather than presenting them as buyers.
+        if any(signal in title.lower() for signal in ("top 10", "best 10", "supplier directory", "company directory", "list of suppliers")):
+            continue
+        if any(signal in path for signal in ("/blog/", "/blogs/", "/category/", "/tag/", "/directory/", "/listing/")):
+            continue
+        blob = " ".join(val(item.get(k)) for k in ("title", "description", "markdown", "content"))
+        website = f"{urlparse(url).scheme}://{host}"
+        if host in seen_domains:
+            continue
+
+        # Only scrape one official-site candidate every third workflow run.
+        # Search-only runs cost about 2 credits; this averages ~2.33 credits/run.
+        scrape_attempted = False
+        scrape_succeeded = False
+        if GITHUB_RUN_NUMBER > 0 and GITHUB_RUN_NUMBER % 3 == 0 and FIRECRAWL_SCRAPES_THIS_RUN < MAX_FIRECRAWL_SCRAPES_PER_RUN:
+            FIRECRAWL_SCRAPES_THIS_RUN += 1
+            scrape_attempted = True
+            try:
+                scrape_response = session.post(
+                    "https://api.firecrawl.dev/v2/scrape",
+                    headers={
+                        "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                    },
+                    json={"url": url, "formats": ["markdown"], "onlyMainContent": True},
+                    timeout=45,
+                )
+                if scrape_response.status_code == 402:
+                    print("FIRECRAWL_PRODUCT_SCRAPE skipped: credit_limit_reached_http_402; no retries")
+                else:
+                    scrape_response.raise_for_status()
+                    scrape_payload = scrape_response.json()
+                    scrape_data = scrape_payload.get("data") if isinstance(scrape_payload, dict) else {}
+                    if isinstance(scrape_data, dict):
+                        metadata = scrape_data.get("metadata") or {}
+                        source_url = val(metadata.get("sourceURL") or metadata.get("url"))
+                        # Do not trust a redirected third-party page as the company's own contact source.
+                        if not source_url or domain(source_url) == host:
+                            scraped_markdown = val(scrape_data.get("markdown") or scrape_data.get("content"))
+                            if scraped_markdown:
+                                blob = (blob + "\n" + scraped_markdown).strip()
+                                scrape_succeeded = True
+            except Exception as exc:
+                print(f"FIRECRAWL_PRODUCT_SCRAPE failed safely: {type(exc).__name__}")
+        item_emails = sorted(set(email_re.findall(blob)))
+        item_phones = sorted(set(phone_re.findall(blob)))
+        company = re.split(r"\s+[|–—-]\s+", title, maxsplit=1)[0].strip() or host
+        row = {
+            "company_name": company[:200],
+            "website": website,
+            "country": TARGET_MARKET,
+            "buyer_type": BUYER_TYPES,
+            "product_interest": PRODUCT_NAME,
+            "email": item_emails[0] if item_emails else "",
+            "phone": item_phones[0] if item_phones else "",
+            "source_url": url,
+            "evidence": blob[:2500],
+            "verification_status": "official_domain_scraped_needs_review" if scrape_succeeded else "search_result_only_needs_review",
+            "ai_customer_fit": "unknown",
+            "ai_confidence": "0",
+            "ai_recommended_buyer_type": "",
+            "ai_reason": "",
+            "ai_review_status": "pending_manual_review",
+            "run_id": RUN_ID,
+            "collected_at": datetime.now(timezone.utc).isoformat(),
+        }
+        row.update(qualify_product_lead_with_ai(row))
+        rows.append(row)
+        seen_domains.add(host)
+        added += 1
+        if added >= MAX_ITEMS:
+            break
+
+    PRODUCT_LEADS.parent.mkdir(parents=True, exist_ok=True)
+    with PRODUCT_LEADS.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=PRODUCT_LEAD_FIELDS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+    print(
+        "FIRECRAWL_PRODUCT_RUN " + json.dumps({
+            "mode": "product_web",
+            "search_provider": search_provider,
+            "composio_fallback_reason": composio_error,
+            "searches_used": FIRECRAWL_SEARCHES_THIS_RUN,
+            "per_run_search_cap": MAX_FIRECRAWL_SEARCHES_PER_RUN,
+            "search_result_count": len(items),
+            "response_keys": sorted(payload.keys()),
+            "result_payload_type": type(payload.get("data")).__name__,
+            "result_container_keys": sorted(payload.get("data").keys()) if isinstance(payload.get("data"), dict) else [],
+            "new_company_candidates": added,
+            "total_saved_candidates": len(rows),
+            "credits_estimate_for_search": 2 if items or payload.get("success") else 0,
+            "scrape_calls": FIRECRAWL_SCRAPES_THIS_RUN,
+            "scrape_per_run_cap": MAX_FIRECRAWL_SCRAPES_PER_RUN,
+            "workflow_run_number": GITHUB_RUN_NUMBER,
+            "outreach_sent": False,
+            "file": str(PRODUCT_LEADS.relative_to(ROOT)) if PRODUCT_LEADS.is_relative_to(ROOT) else PRODUCT_LEADS.name,
+        }, ensure_ascii=False),
+        flush=True,
+    )
+
+
 def main():
+    if COLLECTION_MODE == "product_web":
+        run_product_web_collection()
+        return
+
     # Always create the account-only CSV with a stable header, even when no
     # relevant personal profile is discovered in this run.
     if not PERSONAL_PROFILES.exists():
@@ -1587,13 +2099,29 @@ def main():
         f"personal_profile_keys={len(EXISTING_PERSONAL_KEYS)}"
     )
 
-    # Cloudflare is reserved for public Facebook discovery. LinkedIn company
-    # discovery runs through Apify; Exa is retained as a bounded Facebook backup.
+    # Composio Firecrawl is the primary discovery stage for both requested networks.
     is_auto = PLATFORM not in PLATFORMS
     platforms_to_collect = AUTO_PLATFORMS if is_auto else [PLATFORM]
-    CLOUDFLARE_PRIMARY_RESULTS["linkedin"] = []
-    CLOUDFLARE_PRIMARY_RESULTS["facebook"] = []
-    if CLOUDFLARE_TOKEN and PLATFORM != "linkedin":
+    for target in ("linkedin", "facebook"):
+        COMPOSIO_PRIMARY_RESULTS[target] = []
+        CLOUDFLARE_PRIMARY_RESULTS[target] = []
+
+    if COMPOSIO_API_KEY:
+        for target_platform in platforms_to_collect:
+            try:
+                COMPOSIO_PRIMARY_RESULTS[target_platform] = composio_search_candidates(
+                    target_platform, CLOUDFLARE_PRIMARY_QUERY
+                )
+            except Exception as exc:
+                print(
+                    f"Composio primary discovery failed; continuing with bounded backups: "
+                    f"platform={target_platform}; {type(exc).__name__}: {exc}"
+                )
+    else:
+        print("COMPOSIO_PRIMARY_SKIPPED: COMPOSIO_API_KEY missing; bounded backups remain available")
+
+    # Cloudflare /search is a bounded discovery backup only; /collect is used for profile/contact enrichment.
+    if CLOUDFLARE_TOKEN and PLATFORM != "linkedin" and not any(COMPOSIO_PRIMARY_RESULTS.values()):
         try:
             primary_platform = "facebook" if is_auto else PLATFORM
             primary_candidates = cloudflare_search_candidates(
@@ -1604,18 +2132,16 @@ def main():
                 if candidate_platform in CLOUDFLARE_PRIMARY_RESULTS:
                     CLOUDFLARE_PRIMARY_RESULTS[candidate_platform].append(candidate)
             print(
-                "CLOUDFLARE_PRIMARY_DISCOVERY "
+                "CLOUDFLARE_DISCOVERY_BACKUP "
                 + json.dumps({
                     "requested_platform": primary_platform,
                     "linkedin_candidates": len(CLOUDFLARE_PRIMARY_RESULTS["linkedin"]),
                     "facebook_candidates": len(CLOUDFLARE_PRIMARY_RESULTS["facebook"]),
-                    "known_company_urls_loaded": len(EXISTING_SOCIAL_KEYS),
-                    "known_personal_urls_loaded": len(EXISTING_PERSONAL_KEYS),
                 }, ensure_ascii=False)
             )
         except Exception as exc:
             print(
-                f"Cloudflare primary discovery failed; using bounded native-search fallback: "
+                f"Cloudflare discovery backup failed; using other bounded providers: "
                 f"{type(exc).__name__}: {exc}"
             )
 
@@ -1793,9 +2319,9 @@ def main():
         row.update({
             "company_name": company,
             "website": web,
-            "country": "China",
+            "country": TARGET_MARKET,
             "industry": inferred_industry,
-            "buyer_type": "industrial-lubricant manufacturer / producer",
+            "buyer_type": BUYER_TYPES,
             "product_interest": product_labels.get(inferred_industry, inferred_industry),
             "contact_person": contact,
             "email": email,

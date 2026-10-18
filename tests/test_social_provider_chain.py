@@ -9,6 +9,98 @@ import gemini_utils
 
 
 class ProviderChainTests(unittest.TestCase):
+    def test_composio_search_resolves_rest_account_and_owner(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def __init__(self, payload):
+                self.payload = payload
+
+            def json(self):
+                return self.payload
+
+            def raise_for_status(self):
+                return None
+
+        account_response = Response({"items": [{
+            "id": "ca_test-firecrawl",
+            "status": "ACTIVE",
+            "toolkit": {"slug": "firecrawl"},
+            "user_id": "composio-owner-123",
+            "is_default": True,
+        }]})
+        execute_response = Response({"successful": True, "data": {"results": []}})
+
+        with (
+            patch.object(social, "COMPOSIO_API_KEY", "test-composio-key"),
+            patch.object(social, "COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID", "firecrawl_test-alias"),
+            patch.object(social, "COMPOSIO_USER_ID", "GLOBALI90"),
+            patch.object(social.session, "get", return_value=account_response),
+            patch.object(social.session, "post", return_value=execute_response) as post,
+        ):
+            result = social.composio_search_candidates("linkedin", "test query")
+
+        self.assertEqual(result, [])
+        body = post.call_args.kwargs["json"]
+        self.assertEqual(body["user_id"], "composio-owner-123")
+        self.assertEqual(body["connected_account_id"], "ca_test-firecrawl")
+        self.assertEqual(body["arguments"]["q"].startswith("site:linkedin.com/company"), True)
+
+    def test_product_first_query_uses_configured_product_market_and_buyers(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def __init__(self, payload):
+                self.payload = payload
+
+            def json(self):
+                return self.payload
+
+            def raise_for_status(self):
+                return None
+
+        account_response = Response({"items": [{
+            "id": "ca_test-firecrawl",
+            "status": "ACTIVE",
+            "toolkit": {"slug": "firecrawl"},
+            "user_id": "composio-owner-123",
+        }]})
+        execute_response = Response({"successful": True, "data": {"results": []}})
+        with (
+            patch.object(social, "COMPOSIO_API_KEY", "test-composio-key"),
+            patch.object(social, "COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID", "firecrawl_test-alias"),
+            patch.object(social, "COMPOSIO_USER_ID", "GLOBALI90"),
+            patch.object(social, "PRODUCT_NAME", "titanium dioxide"),
+            patch.object(social, "TARGET_MARKET", "Turkey"),
+            patch.object(social, "BUYER_TYPES", "importers, distributors"),
+            patch.object(social.session, "get", return_value=account_response),
+            patch.object(social.session, "post", return_value=execute_response) as post,
+        ):
+            social.composio_search_candidates("linkedin", "unused")
+
+        query = post.call_args.kwargs["json"]["arguments"]["q"]
+        self.assertIn("titanium dioxide", query)
+        self.assertIn("Turkey", query)
+        self.assertIn("importers, distributors", query)
+
+    def test_dynamic_product_and_market_relevance(self):
+        with (
+            patch.object(social, "PRODUCT_TERMS", ("titanium dioxide", "titanium")),
+            patch.object(social, "MARKET_SIGNALS", ("turkey",)),
+            patch.object(social, "BUYER_TYPE_TERMS", ("importer", "distributor")),
+            patch.object(social, "TARGET_MARKET", "Turkey"),
+        ):
+            self.assertTrue(social.relevant_social_profile(
+                "linkedin",
+                "https://www.linkedin.com/company/example",
+                "Example Titanium Dioxide Importer",
+                "https://example.com",
+                "Istanbul, Turkey",
+                "Importer and distributor of titanium dioxide",
+            ))
+
     def test_facebook_profile_enrichment_uses_cloudflare_only(self):
         valid_profile = (
             "Example Industrial Lubricants Company",
@@ -605,6 +697,69 @@ class ProviderChainTests(unittest.TestCase):
                 social.cloudflare_profile("facebook", "https://www.facebook.com/example")
 
         mocked_post.assert_not_called()
+
+
+    def test_product_web_collection_uses_one_search_and_extracts_public_contacts(self):
+        import csv
+        import tempfile
+        class Response:
+            status_code = 200
+            def raise_for_status(self):
+                return None
+            def json(self):
+                return {"success": True, "data": {"web": [{
+                    "url": "https://example-manufacturer.cn/contact",
+                    "title": "Example Industrial Supplier | Contact",
+                    "description": "Industrial lubricants manufacturer. Contact sales@example-manufacturer.cn Tel +86 123 4567 8901",
+                }, {
+                    "url": "https://www.linkedin.com/company/not-an-official-site",
+                    "title": "Social profile",
+                    "description": "Should be filtered",
+                }]}}
+        with tempfile.TemporaryDirectory() as tmp:
+            leads_path = Path(tmp) / "product_leads.csv"
+            with (
+                patch.object(social, "FIRECRAWL_API_KEY", "test-firecrawl-key"),
+                patch.object(social, "PRODUCT_LEADS", leads_path),
+                patch.object(social, "PRODUCT_NAME", "industrial lubricants"),
+                patch.object(social, "TARGET_MARKET", "China"),
+                patch.object(social, "BUYER_TYPES", "manufacturers, importers"),
+                patch.object(social, "MAX_ITEMS", 3),
+                patch.object(social, "GITHUB_RUN_NUMBER", 0),
+                patch.object(social, "FIRECRAWL_SEARCHES_THIS_RUN", 0),
+                patch.object(social.session, "post", return_value=Response()) as post,
+            ):
+                social.run_product_web_collection()
+            post.assert_called_once()
+            self.assertEqual(post.call_args.args[0], "https://api.firecrawl.dev/v2/search")
+            self.assertEqual(post.call_args.kwargs["json"]["limit"], 10)
+            with leads_path.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["email"], "sales@example-manufacturer.cn")
+            self.assertEqual(rows[0]["country"], "China")
+            self.assertEqual(rows[0]["verification_status"], "search_result_only_needs_review")
+
+
+    def test_gemini_classifies_product_lead_without_sending_outreach(self):
+        with (
+            patch.dict("os.environ", {"GEMINI_API_KEY": "test-gemini-key", "GEMINI_MODEL": "test-model"}),
+            patch.object(gemini_utils, "generate_text", return_value='{"fit":"likely_customer","confidence":91,"recommended_buyer_type":"industrial end-user","reason":"The evidence identifies an industrial manufacturer with a stated need for the target product.","needs_manual_review":false}') as generate,
+        ):
+            result = social.qualify_product_lead_with_ai({
+                "company_name": "Example Factory",
+                "website": "https://example.com",
+                "country": "Turkey",
+                "buyer_type": "importers, industrial end-users",
+                "product_interest": "titanium dioxide",
+                "source_url": "https://example.com/about",
+                "evidence": "Industrial manufacturer using titanium dioxide in production",
+            })
+        self.assertEqual(result["ai_customer_fit"], "likely_customer")
+        self.assertEqual(result["ai_confidence"], "91")
+        self.assertEqual(result["ai_review_status"], "ai_screened_review_before_outreach")
+        generate.assert_called_once()
+        self.assertEqual(generate.call_args.kwargs["model"], "test-model")
 
 
 if __name__ == "__main__":
