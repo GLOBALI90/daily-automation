@@ -85,6 +85,15 @@ class ProviderChainTests(unittest.TestCase):
         self.assertIn("Turkey", query)
         self.assertIn("importers, distributors", query)
 
+    def test_buyer_types_are_inferred_from_selected_product(self):
+        self.assertIn("EPC contractors", social.infer_buyer_types("Solar panels / PV modules"))
+        self.assertIn("fabricators", social.infer_buyer_types("Hot-rolled coil"))
+        self.assertIn("industrial consumers", social.infer_buyer_types("Industrial lubricants"))
+
+    def test_unknown_country_does_not_silently_default_to_us(self):
+        self.assertEqual(social.firecrawl_country_code("China"), "cn")
+        self.assertEqual(social.firecrawl_country_code("American Samoa"), "")
+
     def test_dynamic_product_and_market_relevance(self):
         with (
             patch.object(social, "PRODUCT_TERMS", ("titanium dioxide", "titanium")),
