@@ -764,7 +764,7 @@ class ProviderChainTests(unittest.TestCase):
             self.assertEqual(rows[0]["verification_status"], "search_result_only_needs_review")
 
 
-    def test_product_web_collection_rejects_ai_classified_suppliers(self):
+    def test_product_web_collection_retains_ai_classified_suppliers_for_observation(self):
         import csv
         import tempfile
 
@@ -803,7 +803,9 @@ class ProviderChainTests(unittest.TestCase):
                 social.run_product_web_collection()
             with leads_path.open(encoding="utf-8", newline="") as handle:
                 rows = list(csv.DictReader(handle))
-            self.assertEqual(rows, [])
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["ai_customer_fit"], "supplier_only")
+            self.assertEqual(rows[0]["ai_confidence"], "92")
 
 
     def test_product_web_collection_cleans_stale_supplier_records(self):
