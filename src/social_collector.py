@@ -69,7 +69,7 @@ COLLECTION_MODE = os.getenv("COLLECTION_MODE", "social").strip().lower()
 PRODUCT_LEADS = DATA / "product_leads.csv"
 PRODUCT_LEAD_FIELDS = [
     "company_name", "website", "country", "buyer_type", "product_interest",
-    "email", "phone", "source_url", "evidence", "verification_status",
+    "email", "phone", "whatsapp", "source_url", "evidence", "verification_status",
     "ai_customer_fit", "ai_confidence", "ai_recommended_buyer_type",
     "ai_reason", "ai_review_status", "run_id", "collected_at"
 ]
@@ -2210,6 +2210,22 @@ def run_product_web_collection():
             candidate for candidate in phone_re.findall(blob)
             if plausible_public_phone(candidate)
         })
+        # Only extract a WhatsApp contact when the public page explicitly labels it
+        # as WhatsApp or provides a wa.me link; a generic phone number is not enough.
+        item_whatsapp = ""
+        wa_link = re.search(r"(?i)https?://(?:www\.)?wa\.me/(\d{8,15})", blob)
+        if wa_link:
+            item_whatsapp = "+" + wa_link.group(1)
+        else:
+            for wa_label in re.finditer(r"(?i)whats\s*app|whatsapp", blob):
+                segment = blob[wa_label.end():wa_label.end() + 120]
+                wa_phone = re.search(r"(?<!\w)(\+\s?\d[\d ().-]{7,}\d|00\s?\d[\d ().-]{7,}\d)", segment)
+                if wa_phone:
+                    raw_wa = re.sub(r"[ ().-]", "", wa_phone.group(1))
+                    item_whatsapp = "+" + raw_wa[2:] if raw_wa.startswith("00") else raw_wa
+                    break
+        if item_whatsapp and not plausible_public_phone(item_whatsapp):
+            item_whatsapp = ""
         title_parts = re.split(r"\s+[|–—-]\s+", title, maxsplit=1)
         company = title_parts[0].strip() or host
         generic_page_titles = {
@@ -2226,6 +2242,7 @@ def run_product_web_collection():
             "product_interest": PRODUCT_NAME,
             "email": item_emails[0] if item_emails else "",
             "phone": item_phones[0] if item_phones else "",
+            "whatsapp": item_whatsapp,
             "source_url": url,
             "evidence": blob[:2500],
             "verification_status": "official_domain_scraped_needs_review" if scrape_succeeded else "search_result_only_needs_review",
