@@ -1935,6 +1935,8 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
             "token_configured": bool(CLOUDFLARE_TOKEN),
             "calls_used": CLOUDFLARE_CALLS_THIS_RUN,
             "per_run_cap": MAX_CLOUDFLARE_CALLS_PER_RUN,
+            "worker_daily_browser_action_cap": 4,
+            "minimum_worker_action_interval_seconds": 11,
             "requests": CLOUDFLARE_AUDIT
         },
         "profile_fetch_results": PROFILE_AUDIT,
@@ -2034,12 +2036,11 @@ Confidence must be an integer from 0 to 100. Set needs_manual_review true whenev
 
 
 def run_product_web_collection():
-    """Collect product-specific business prospects using one bounded Firecrawl search.
+    """Collect product prospects through Composio, capped Cloudflare web/Maps, and Firecrawl fallback.
 
-    This mode intentionally does not scrape result pages yet: search-only costs
-    2 credits per 10 results, keeping the scheduled three-hour workflow within
-    a conservative free-tier budget. Contact fields are filled only when the
-    public search result itself contains them.
+    Scheduled discovery is paced to every third workflow run. Cloudflare's own
+    Worker budget is four Browser actions/day; direct Firecrawl remains optional
+    and is never required when Composio or Cloudflare can return public results.
     """
     global FIRECRAWL_SEARCHES_THIS_RUN, FIRECRAWL_SCRAPES_THIS_RUN
 
@@ -2068,15 +2069,15 @@ def run_product_web_collection():
         for row in rows if val(row.get("source_url"))
     }
 
-    # Search for buyers with a country-localized Firecrawl query.
+    # Search for buyers with a country-localized query.
     # All three dimensions are driven by manual workflow inputs.
     query = (
         f'{TARGET_MARKET} "{PRODUCT_NAME}" {BUYER_TYPES} '
         'buyers importers distributors factories procurement industrial end users company contact'
     )
 
-    # The workflow checks in every three hours, but external discovery is paced to
-    # every third scheduled run so the configured monthly Firecrawl credit limit lasts.
+    # The workflow checks every three hours, but external discovery is paced to
+    # every third scheduled run to preserve the shared external-provider budgets.
     event_name = os.getenv("GITHUB_EVENT_NAME", "").strip().lower()
     if event_name == "schedule" and GITHUB_RUN_NUMBER % 3 != 0:
         PRODUCT_LEADS.parent.mkdir(parents=True, exist_ok=True)
@@ -2205,7 +2206,7 @@ def run_product_web_collection():
     # Use the already-configured Exa key as a bounded secondary discovery source.
     # Its shared monthly counter caps this fallback at 20 searches across modes.
     exa_candidates_added = 0
-    if EXA_API_KEY and _reserve_exa_search_call():
+    if EXA_API_KEY and len(items) < MAX_ITEMS and _reserve_exa_search_call():
         exa_query = (
             f'B2B customers in {TARGET_MARKET} that buy or use "{PRODUCT_NAME}". '
             f'Prioritize {BUYER_TYPES}, procurement teams, and industrial end-users. '
@@ -2452,7 +2453,7 @@ def run_product_web_collection():
             "result_container_keys": sorted(payload.get("data").keys()) if isinstance(payload.get("data"), dict) else [],
             "new_company_candidates": added,
             "total_saved_candidates": len(rows),
-            "credits_estimate_for_search": 2 if items or payload.get("success") else 0,
+            "credits_estimate_for_search": 2 if search_provider in ("Composio Firecrawl", "Direct Firecrawl fallback") and (items or payload.get("success")) else 0,
             "scrape_calls": FIRECRAWL_SCRAPES_THIS_RUN,
             "scrape_per_run_cap": MAX_FIRECRAWL_SCRAPES_PER_RUN,
             "workflow_run_number": GITHUB_RUN_NUMBER,
