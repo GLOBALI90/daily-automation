@@ -709,8 +709,8 @@ class ProviderChainTests(unittest.TestCase):
             def json(self):
                 return {"success": True, "data": {"web": [{
                     "url": "https://example-manufacturer.cn/contact",
-                    "title": "Example Industrial Supplier | Contact",
-                    "description": "Industrial lubricants manufacturer. Contact sales@example-manufacturer.cn Tel +86 123 4567 8901",
+                    "title": "About Us | Dongguan Fuxiaojing New Materials Technology Co., Ltd.",
+                    "description": "Industrial lubricants distributor. Contact sales@example-manufacturer.cn Date 2021-05-17 Tel +86 138 0013 8000",
                 }, {
                     "url": "https://www.linkedin.com/company/not-an-official-site",
                     "title": "Social profile",
@@ -749,6 +749,8 @@ class ProviderChainTests(unittest.TestCase):
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["email"], "sales@example-manufacturer.cn")
+            self.assertEqual(rows[0]["phone"], "+86 138 0013 8000")
+            self.assertEqual(rows[0]["company_name"], "Dongguan Fuxiaojing New Materials Technology Co., Ltd.")
             self.assertEqual(rows[0]["country"], "China")
             self.assertEqual(rows[0]["verification_status"], "search_result_only_needs_review")
 
