@@ -1842,14 +1842,30 @@ def run_product_web_collection():
     if PRODUCT_LEADS.exists():
         with PRODUCT_LEADS.open(encoding="utf-8", newline="") as handle:
             rows = list(csv.DictReader(handle))
+
+    # Clean supplier-only and irrelevant records from earlier runs so they do not
+    # remain in the active customer list or block future discovery by domain.
+    prior_count = len(rows)
+    rows = [
+        row for row in rows
+        if val(row.get("ai_customer_fit")).lower() not in {"supplier_only", "irrelevant"}
+    ]
+    removed_prior = prior_count - len(rows)
+    if removed_prior:
+        print(f"AI_EXISTING_LEADS_CLEANUP removed_non_customer_records={removed_prior}")
+
     seen_domains = {
         domain(val(row.get("website") or row.get("source_url")))
         for row in rows if val(row.get("website") or row.get("source_url"))
     }
 
-    # Target actual buying organizations rather than defaulting to product manufacturers.
-    # Product, market, and buyer categories are supplied by the manual workflow inputs.
-    query = f'"{PRODUCT_NAME}" {BUYER_TYPES} buyers procurement purchasing in {TARGET_MARKET}'
+    # Search for organizations that purchase/use the product, not just its makers.
+    # All three dimensions are driven by manual workflow inputs.
+    query = (
+        f'{TARGET_MARKET} companies that buy or use "{PRODUCT_NAME}" '
+        f'{BUYER_TYPES} procurement purchasing factory industrial end-user website contact '
+        '-market-research -market-size -forecast'
+    )
 
     def find_result_items(node):
         if isinstance(node, list):
@@ -1960,12 +1976,20 @@ def run_product_web_collection():
             continue
         title = val(item.get("title"))
         path = urlparse(url).path.lower()
-        # Reject obvious listicles/directories rather than presenting them as buyers.
-        if any(signal in title.lower() for signal in ("top 10", "best 10", "supplier directory", "company directory", "list of suppliers")):
+        blob = " ".join(val(item.get(k)) for k in ("title", "description", "markdown", "content"))
+        combined_text = (title + " " + blob).lower()
+        # Reject obvious listicles, directories, and market-research pages before
+        # spending an AI classification call on results that cannot be buyers.
+        if any(signal in combined_text for signal in (
+            "top 10", "best 10", "supplier directory", "company directory",
+            "list of suppliers", "market size", "market report", "market research",
+            "market forecast", "market share", "market trends", "industry report",
+            "research report", "market outlook", "market growth", "market analysis",
+        )):
+            print(f"PRODUCT_RESULT_REJECTED reason=directory_or_market_report; title={title[:160]}")
             continue
         if any(signal in path for signal in ("/blog/", "/blogs/", "/category/", "/tag/", "/directory/", "/listing/")):
             continue
-        blob = " ".join(val(item.get(k)) for k in ("title", "description", "markdown", "content"))
         website = f"{urlparse(url).scheme}://{host}"
         if host in seen_domains:
             continue
