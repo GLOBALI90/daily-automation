@@ -2174,6 +2174,7 @@ def run_product_web_collection():
         # Search-only runs cost about 2 credits; this averages ~2.33 credits/run.
         scrape_attempted = False
         scrape_succeeded = False
+        official_page_text = ""
         if GITHUB_RUN_NUMBER > 0 and GITHUB_RUN_NUMBER % 9 == 0 and FIRECRAWL_SCRAPES_THIS_RUN < MAX_FIRECRAWL_SCRAPES_PER_RUN:
             FIRECRAWL_SCRAPES_THIS_RUN += 1
             scrape_attempted = True
@@ -2201,24 +2202,28 @@ def run_product_web_collection():
                         if not source_url or domain(source_url) == host:
                             scraped_markdown = val(scrape_data.get("markdown") or scrape_data.get("content"))
                             if scraped_markdown:
+                                official_page_text = scraped_markdown
                                 blob = (blob + "\n" + scraped_markdown).strip()
                                 scrape_succeeded = True
             except Exception as exc:
                 print(f"FIRECRAWL_PRODUCT_SCRAPE failed safely: {type(exc).__name__}")
-        item_emails = sorted(set(email_re.findall(blob)))
+        # Outbound contact details must come from the successfully scraped official site,
+        # never only from a search snippet.
+        contact_text = official_page_text if scrape_succeeded else blob
+        item_emails = sorted(set(email_re.findall(contact_text)))
         item_phones = sorted({
-            candidate for candidate in phone_re.findall(blob)
+            candidate for candidate in phone_re.findall(contact_text)
             if plausible_public_phone(candidate)
         })
-        # Only extract a WhatsApp contact when the public page explicitly labels it
-        # as WhatsApp or provides a wa.me link; a generic phone number is not enough.
+        # Only extract a WhatsApp contact when the official page explicitly labels it
+        # as WhatsApp or provides a public wa.me link; a generic phone number is not enough.
         item_whatsapp = ""
-        wa_link = re.search(r"(?i)https?://(?:www\.)?wa\.me/(\d{8,15})", blob)
+        wa_link = re.search(r"(?i)https?://(?:www\.)?wa\.me/(\d{8,15})", official_page_text)
         if wa_link:
             item_whatsapp = "+" + wa_link.group(1)
         else:
-            for wa_label in re.finditer(r"(?i)whats\s*app|whatsapp", blob):
-                segment = blob[wa_label.end():wa_label.end() + 120]
+            for wa_label in re.finditer(r"(?i)whats\s*app|whatsapp", official_page_text):
+                segment = official_page_text[wa_label.end():wa_label.end() + 120]
                 wa_phone = re.search(r"(?<!\w)(\+\s?\d[\d ().-]{7,}\d|00\s?\d[\d ().-]{7,}\d)", segment)
                 if wa_phone:
                     raw_wa = re.sub(r"[ ().-]", "", wa_phone.group(1))
