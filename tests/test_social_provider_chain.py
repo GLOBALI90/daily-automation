@@ -740,10 +740,11 @@ class ProviderChainTests(unittest.TestCase):
                 social.run_product_web_collection()
             post.assert_called_once()
             self.assertEqual(post.call_args.args[0], "https://api.firecrawl.dev/v2/search")
-            self.assertEqual(post.call_args.kwargs["json"]["limit"], 10)
+            self.assertEqual(post.call_args.kwargs["json"]["limit"], 5)
+            self.assertEqual(post.call_args.kwargs["json"]["country"], "cn")
             self.assertIn("industrial lubricants", post.call_args.kwargs["json"]["query"])
             self.assertIn("manufacturers, importers", post.call_args.kwargs["json"]["query"])
-            self.assertIn("companies that buy or use", post.call_args.kwargs["json"]["query"])
+            self.assertIn("buyers importers distributors factories procurement", post.call_args.kwargs["json"]["query"])
             with leads_path.open(encoding="utf-8", newline="") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 1)
