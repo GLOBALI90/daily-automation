@@ -298,7 +298,7 @@ def persist_outreach(rows, fieldnames):
 
 
 def main_product_outreach():
-    """Automatically contact only AI-cleared, high-confidence buyers using verified public channels."""
+    """Temporary observation mode: contact candidates with a usable public email or explicit WhatsApp contact."""
     product_file = ROOT / "data" / "product_leads.csv"
     if not product_file.exists():
         print("PRODUCT_OUTREACH skipped: product_leads.csv not found")
@@ -328,51 +328,29 @@ def main_product_outreach():
 
     queue = []
     for row in candidates:
-        if (row.get("ai_customer_fit") or "").strip().lower() != "likely_customer":
-            continue
-        try:
-            confidence = int(row.get("ai_confidence") or 0)
-        except (TypeError, ValueError):
-            confidence = 0
-        if confidence < 85:
-            continue
-        if row.get("ai_review_status") != "ai_screened_review_before_outreach":
-            continue
-        # Search-result snippets alone are not enough for automatic outbound contact.
-        if row.get("verification_status") != "official_domain_scraped_needs_review":
-            continue
-
-        website = (row.get("website") or "").strip()
-        try:
-            from urllib.parse import urlparse
-            official_host = (urlparse(website).hostname or "").lower().removeprefix("www.")
-        except Exception:
-            official_host = ""
+        # Temporary observation mode: do not gate outreach on AI confidence,
+        # AI review status, scrape status, or an email-domain match. Keep basic
+        # contact-format checks and duplicate prevention while we observe results.
         email = (row.get("email") or "").strip().lower()
         email_match = re.fullmatch(r"[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})", email, re.I)
-        email_host = email_match.group(1).lower().removeprefix("www.") if email_match else ""
-        verified_email = bool(
-            email_match and official_host
-            and (email_host == official_host or email_host.endswith("." + official_host))
-            and email not in sent_emails
-        )
+        usable_email = bool(email_match and email not in sent_emails)
 
-        # A generic phone is never promoted to WhatsApp. The source field must
-        # have been explicitly extracted from a WhatsApp label or public wa.me link.
+        # A generic phone is still not assumed to be WhatsApp; only use a WhatsApp
+        # contact explicitly extracted from a public WhatsApp label/link.
         wa_number = verified_whatsapp_number(row)
         wa_digits = re.sub(r"\D", "", wa_number)
-        verified_wa = bool(
+        usable_wa = bool(
             wa_number.startswith(("+", "00"))
             and 8 <= len(wa_digits) <= 15
             and wa_digits not in done_whatsapp
         )
-        if verified_email or verified_wa:
-            queue.append((row, verified_email, wa_number if verified_wa else ""))
+        if usable_email or usable_wa:
+            queue.append((row, usable_email, wa_number if usable_wa else ""))
 
     print(
         f"PRODUCT_OUTREACH_QUEUE eligible_companies={len(queue)} "
         f"sent_emails_before={len(sent_emails)} sent_or_queued_whatsapp_before={len(done_whatsapp)} "
-        "requires=likely_customer+confidence>=85+AI_cleared+official_site_scrape+verified_public_channel"
+        "temporary_gates=usable_public_email_or_explicit_whatsapp+dedupe"
     )
     for row, verified_email, wa_number in queue[:1]:
         company = (row.get("company_name") or row.get("website") or "unnamed lead").strip()
@@ -415,7 +393,7 @@ def main_product_outreach():
             f"email_status={email_status} whatsapp_status={wa_status}"
         )
     if not queue:
-        print("PRODUCT_OUTREACH: no lead met all automatic-send quality gates; no messages sent")
+        print("PRODUCT_OUTREACH: no candidate currently has a usable, non-duplicate public email or explicit WhatsApp contact")
 
 def main():
     if os.getenv("OUTREACH_SOURCE", "social").strip().lower() == "product_web":
@@ -452,7 +430,6 @@ def main():
     candidates = []
     skipped_noncurrent = 0
     skipped_non_social = 0
-    skipped_out_of_scope = 0
     for candidate in rows:
         is_current = bool(current_run_id and candidate.get("run_id") == current_run_id)
         platform = (candidate.get("platform") or "").strip().lower()
@@ -469,18 +446,10 @@ def main():
         if not is_allowed_social:
             skipped_non_social += 1
             continue
-        # Never spend model/API quota on stale rows; only leads written by this
-        # run and independently verified as China lubricant manufacturers qualify.
+        # Keep the current-run boundary and supported social-platform checks,
+        # but temporarily disable the old China/industrial-lubricants pilot gate.
         if not is_current:
             skipped_noncurrent += 1
-            continue
-        if not is_pilot_target(candidate):
-            skipped_out_of_scope += 1
-            print(
-                "OUTREACH_SKIP_OUT_OF_SCOPE "
-                f"company={(candidate.get('company_name') or 'unknown')[:100]}",
-                flush=True,
-            )
             continue
         key = lead_key(candidate)
         if key and key not in done:
@@ -489,7 +458,7 @@ def main():
     print(
         f"OUTREACH_QUEUE current_run_social_candidates={len(candidates)} "
         f"skipped_historical={skipped_noncurrent} skipped_non_social={skipped_non_social} "
-        f"skipped_out_of_scope={skipped_out_of_scope} "
+        f"pilot_country_product_filter=disabled "
         f"already_recorded={len(done)} limit={OUTREACH_LIMIT_PER_RUN}",
         flush=True,
     )
