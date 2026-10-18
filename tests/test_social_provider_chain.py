@@ -727,18 +727,71 @@ class ProviderChainTests(unittest.TestCase):
                 patch.object(social, "MAX_ITEMS", 3),
                 patch.object(social, "GITHUB_RUN_NUMBER", 0),
                 patch.object(social, "FIRECRAWL_SEARCHES_THIS_RUN", 0),
+                patch.object(social, "COMPOSIO_API_KEY", ""),
+                patch.object(social, "qualify_product_lead_with_ai", return_value={
+                    "ai_customer_fit": "likely_customer",
+                    "ai_confidence": "88",
+                    "ai_recommended_buyer_type": "importer",
+                    "ai_reason": "Evidence indicates a possible customer.",
+                    "ai_review_status": "pending_manual_review",
+                }),
                 patch.object(social.session, "post", return_value=Response()) as post,
             ):
                 social.run_product_web_collection()
             post.assert_called_once()
             self.assertEqual(post.call_args.args[0], "https://api.firecrawl.dev/v2/search")
             self.assertEqual(post.call_args.kwargs["json"]["limit"], 10)
+            self.assertIn("industrial lubricants", post.call_args.kwargs["json"]["query"])
+            self.assertIn("manufacturers, importers", post.call_args.kwargs["json"]["query"])
+            self.assertIn("buyers procurement purchasing", post.call_args.kwargs["json"]["query"])
             with leads_path.open(encoding="utf-8", newline="") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["email"], "sales@example-manufacturer.cn")
             self.assertEqual(rows[0]["country"], "China")
             self.assertEqual(rows[0]["verification_status"], "search_result_only_needs_review")
+
+
+    def test_product_web_collection_rejects_ai_classified_suppliers(self):
+        import csv
+        import tempfile
+
+        class Response:
+            status_code = 200
+            def raise_for_status(self):
+                return None
+            def json(self):
+                return {"success": True, "data": {"web": [{
+                    "url": "https://supplier-example.cn/about",
+                    "title": "Industrial Lubricants Manufacturer",
+                    "description": "Manufacturer and exporter of industrial lubricants in China.",
+                }]}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            leads_path = Path(tmp) / "product_leads.csv"
+            with (
+                patch.object(social, "FIRECRAWL_API_KEY", "test-firecrawl-key"),
+                patch.object(social, "COMPOSIO_API_KEY", ""),
+                patch.object(social, "PRODUCT_LEADS", leads_path),
+                patch.object(social, "PRODUCT_NAME", "industrial lubricants"),
+                patch.object(social, "TARGET_MARKET", "China"),
+                patch.object(social, "BUYER_TYPES", "importers, industrial end-users"),
+                patch.object(social, "MAX_ITEMS", 3),
+                patch.object(social, "GITHUB_RUN_NUMBER", 0),
+                patch.object(social, "FIRECRAWL_SEARCHES_THIS_RUN", 0),
+                patch.object(social, "qualify_product_lead_with_ai", return_value={
+                    "ai_customer_fit": "supplier_only",
+                    "ai_confidence": "92",
+                    "ai_recommended_buyer_type": "",
+                    "ai_reason": "This is a producer, not a target buyer.",
+                    "ai_review_status": "ai_screened_review_before_outreach",
+                }),
+                patch.object(social.session, "post", return_value=Response()),
+            ):
+                social.run_product_web_collection()
+            with leads_path.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows, [])
 
 
     def test_gemini_classifies_product_lead_without_sending_outreach(self):
