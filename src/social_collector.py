@@ -2146,8 +2146,8 @@ def run_product_web_collection():
             payload = composio_response.json()
             if isinstance(payload, dict) and payload.get("successful") is False:
                 raise RuntimeError("Composio Firecrawl Search returned successful=false")
-            items = find_result_items(payload.get("data") or payload)
-            print(f"COMPOSIO_PRODUCT_SEARCH results={len(items)}")
+            items = find_result_items(payload.get("data") or payload)[:max(1, MAX_ITEMS - 1)]
+            print(f"COMPOSIO_PRODUCT_SEARCH results={len(items)}; reserved_slot_for_cloudflare={bool(CLOUDFLARE_TOKEN)}")
         except Exception as exc:
             composio_error = f"{type(exc).__name__}: {exc}"
             print(f"COMPOSIO_PRODUCT_SEARCH failed; trying bounded direct Firecrawl fallback: {composio_error}")
@@ -2156,7 +2156,7 @@ def run_product_web_collection():
     # Cloudflare Browser Run also collects public web and Google Maps results.
     # The Worker enforces four browser actions/day and an 11-second minimum interval.
     # Alternate sources on discovery runs so they fit within the shared action budget.
-    if not items and CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
+    if len(items) < MAX_ITEMS and CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
         cloudflare_platform = "maps" if GITHUB_RUN_NUMBER % 2 == 0 else "web"
         cloudflare_query = (
             f'{TARGET_MARKET} "{PRODUCT_NAME}" {BUYER_TYPES} '
@@ -2165,8 +2165,20 @@ def run_product_web_collection():
         )
         try:
             cloudflare_items = cloudflare_public_web_candidates(cloudflare_query, cloudflare_platform)
-            if cloudflare_items:
-                items = cloudflare_items
+            existing_candidate_urls = {
+                val(item.get("url")).split("#", 1)[0].rstrip("/")
+                for item in items if isinstance(item, dict) and val(item.get("url"))
+            }
+            for cloudflare_item in cloudflare_items:
+                cloudflare_url = val(cloudflare_item.get("url")).split("#", 1)[0].rstrip("/")
+                if cloudflare_url and cloudflare_url not in existing_candidate_urls:
+                    items.append(cloudflare_item)
+                    existing_candidate_urls.add(cloudflare_url)
+                if len(items) >= MAX_ITEMS:
+                    break
+            if items and search_provider == "Composio Firecrawl" and not payload:
+                search_provider = "Cloudflare Google Maps Search" if cloudflare_platform == "maps" else "Cloudflare Public Web Search"
+            elif items and not existing_candidate_urls:
                 search_provider = "Cloudflare Google Maps Search" if cloudflare_platform == "maps" else "Cloudflare Public Web Search"
         except Exception as exc:
             print(f"CLOUDFLARE_PUBLIC_SEARCH failed safely: {type(exc).__name__}: {str(exc)[:180]}")
