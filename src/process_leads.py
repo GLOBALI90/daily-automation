@@ -77,7 +77,7 @@ def llm(prompt):
 
 def make_message(row):
     prompt = f"""You are the senior B2B trade development assistant for {COMPANY['brand']} ({COMPANY['legal_name']}).
-Business: international B2B sourcing and trade focused in this pilot on industrial lubricants, lubricating oils and industrial greases.
+Business: international B2B sourcing and trade. For this lead, the selected product focus is {row.get('product_interest','')}.
 Website: {COMPANY['website']}
 WhatsApp: {COMPANY['whatsapp']}
 
@@ -97,7 +97,7 @@ PRICE POSITIONING RULES:
 
 PERSONALIZATION RULES:
 - Tailor the opening and value proposition to the company's industry, product interest, location and evidence.
-- For industrial-lubricant companies, focus only on lubricant products, blending/manufacturing capabilities or industrial-grease needs supported by evidence.
+- Focus on the selected product interest ({row.get('product_interest','')}) and the buyer's evidenced industry/use case. Do not introduce unrelated products.
 - Do not introduce steel, generic chemicals, fuel or unrelated products into this pilot message.
 - Mention only products that are supported by the row or by the company's stated business; do not force a product into an irrelevant lead.
 - Focus on business outcomes: lower procurement cost, alternative sourcing, supply continuity and reduced sourcing friction.
@@ -133,8 +133,8 @@ Email body
         f"SUBJECT: Potential sourcing cooperation with {company}\n\n"
         f"Hello {company} team,\n\n"
         f"I’m reaching out from {COMPANY['brand']} about possible international sourcing cooperation. "
-        "Our current pilot focuses on industrial lubricants, lubricating oils and industrial greases. "
-        "If these products are relevant to your current or upcoming sourcing needs, "
+        f"Our current sourcing focus includes {row.get('product_interest','the relevant product category')}. "
+        "If this product is relevant to your current or upcoming sourcing needs, "
         "we would be glad to review your specifications and discuss possible options.\n\n"
         f"Best regards,\n{COMPANY['brand']}\n{website}"
     )
@@ -297,7 +297,106 @@ def persist_outreach(rows, fieldnames):
     temp_path.replace(OUTREACH)
 
 
+def main_product_outreach():
+    """Automatically email only high-confidence customers with a public email verified on the official site."""
+    product_file = ROOT / "data" / "product_leads.csv"
+    if not product_file.exists():
+        print("PRODUCT_OUTREACH skipped: product_leads.csv not found")
+        return
+    with product_file.open(encoding="utf-8", newline="") as handle:
+        candidates = list(csv.DictReader(handle))
+    existing = list(csv.DictReader(OUTREACH.open(encoding="utf-8"))) if OUTREACH.exists() else []
+    fields = [
+        "company_name", "website", "email", "message", "status",
+        "whatsapp_number", "whatsapp_message", "whatsapp_status", "run_id",
+        "product_interest", "ai_customer_fit", "ai_confidence", "source_url",
+    ]
+    for old in existing:
+        for key in old:
+            if key not in fields:
+                fields.append(key)
+
+    def key_for(row):
+        email = (row.get("email") or "").strip().lower()
+        return f"email:{email}" if email else ""
+
+    done = {
+        key_for(row) for row in existing
+        if row.get("status") == "sent" and key_for(row)
+    }
+    queue = []
+    for row in candidates:
+        if (row.get("ai_customer_fit") or "").strip().lower() != "likely_customer":
+            continue
+        try:
+            confidence = int(row.get("ai_confidence") or 0)
+        except (TypeError, ValueError):
+            confidence = 0
+        if confidence < 85:
+            continue
+        # Search-result snippets alone are not enough for automatic outbound contact.
+        if row.get("verification_status") != "official_domain_scraped_needs_review":
+            continue
+        email = (row.get("email") or "").strip().lower()
+        website = (row.get("website") or "").strip()
+        email_match = re.fullmatch(r"[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})", email, re.I)
+        if not email_match or not website:
+            continue
+        try:
+            from urllib.parse import urlparse
+            official_host = (urlparse(website).hostname or "").lower().removeprefix("www.")
+        except Exception:
+            official_host = ""
+        email_host = email_match.group(1).lower().removeprefix("www.")
+        if not official_host or not (email_host == official_host or email_host.endswith("." + official_host)):
+            continue
+        key = key_for(row)
+        if not key or key in done:
+            continue
+        queue.append(row)
+
+    print(
+        f"PRODUCT_OUTREACH_QUEUE eligible={len(queue)} "
+        f"sent_before={len(done)} threshold_confidence=85 "
+        "requires=likely_customer+official_domain_email+official_site_scrape"
+    )
+    new_rows = []
+    for row in queue[:1]:
+        company = (row.get("company_name") or row.get("website") or "unnamed lead").strip()
+        message = make_message(row)
+        if not message:
+            print(f"PRODUCT_OUTREACH_SKIP company={company[:100]} reason=message_generation_failed")
+            continue
+        status = send_email(row.get("email", ""), message)
+        outcome = {
+            "company_name": row.get("company_name", ""),
+            "website": row.get("website", ""),
+            "email": row.get("email", ""),
+            "message": message,
+            "status": status,
+            "whatsapp_number": "",
+            "whatsapp_message": "",
+            "whatsapp_status": "not_attempted_no_verified_whatsapp",
+            "run_id": os.getenv("GITHUB_RUN_ID", row.get("run_id", "")),
+            "product_interest": row.get("product_interest", ""),
+            "ai_customer_fit": row.get("ai_customer_fit", ""),
+            "ai_confidence": row.get("ai_confidence", ""),
+            "source_url": row.get("source_url", ""),
+        }
+        new_rows.append(outcome)
+        persist_outreach(existing + new_rows, fields)
+        print(
+            f"PRODUCT_OUTREACH_RESULT company={company[:100]} "
+            f"status={status} whatsapp=not_attempted_no_verified_whatsapp"
+        )
+    if not queue:
+        print("PRODUCT_OUTREACH: no lead met all automatic-send quality gates; no messages sent")
+
+
 def main():
+    if os.getenv("OUTREACH_SOURCE", "social").strip().lower() == "product_web":
+        main_product_outreach()
+        return
     if not LEADS.exists():
         print("No leads file found")
         return
