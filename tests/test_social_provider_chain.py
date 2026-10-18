@@ -743,7 +743,7 @@ class ProviderChainTests(unittest.TestCase):
             self.assertEqual(post.call_args.kwargs["json"]["limit"], 10)
             self.assertIn("industrial lubricants", post.call_args.kwargs["json"]["query"])
             self.assertIn("manufacturers, importers", post.call_args.kwargs["json"]["query"])
-            self.assertIn("buyers procurement purchasing", post.call_args.kwargs["json"]["query"])
+            self.assertIn("companies that buy or use", post.call_args.kwargs["json"]["query"])
             with leads_path.open(encoding="utf-8", newline="") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 1)
@@ -786,6 +786,47 @@ class ProviderChainTests(unittest.TestCase):
                     "ai_reason": "This is a producer, not a target buyer.",
                     "ai_review_status": "ai_screened_review_before_outreach",
                 }),
+                patch.object(social.session, "post", return_value=Response()),
+            ):
+                social.run_product_web_collection()
+            with leads_path.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows, [])
+
+
+    def test_product_web_collection_cleans_stale_supplier_records(self):
+        import csv
+        import tempfile
+
+        class Response:
+            status_code = 200
+            def raise_for_status(self):
+                return None
+            def json(self):
+                return {"success": True, "data": {"web": []}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            leads_path = Path(tmp) / "product_leads.csv"
+            with leads_path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=social.PRODUCT_LEAD_FIELDS)
+                writer.writeheader()
+                writer.writerow({
+                    "company_name": "Old supplier",
+                    "website": "https://old-supplier.example",
+                    "country": "China",
+                    "product_interest": "industrial lubricants",
+                    "ai_customer_fit": "supplier_only",
+                })
+            with (
+                patch.object(social, "FIRECRAWL_API_KEY", "test-firecrawl-key"),
+                patch.object(social, "COMPOSIO_API_KEY", ""),
+                patch.object(social, "PRODUCT_LEADS", leads_path),
+                patch.object(social, "PRODUCT_NAME", "industrial lubricants"),
+                patch.object(social, "TARGET_MARKET", "China"),
+                patch.object(social, "BUYER_TYPES", "importers, industrial end-users"),
+                patch.object(social, "MAX_ITEMS", 3),
+                patch.object(social, "GITHUB_RUN_NUMBER", 0),
+                patch.object(social, "FIRECRAWL_SEARCHES_THIS_RUN", 0),
                 patch.object(social.session, "post", return_value=Response()),
             ):
                 social.run_product_web_collection()
