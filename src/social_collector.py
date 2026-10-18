@@ -1449,6 +1449,21 @@ def provider_chain(p, url):
         providers.append(("Apify", lambda: apify_profile(p, url)))
     if not providers:
         errors.append("no_profile_provider_available_or_worker_cap_reached")
+        if p == "linkedin":
+            indexed = LINKEDIN_SEARCH_RESULTS.get(url.rstrip("/"), {})
+            title = val(indexed.get("current_company") or indexed.get("title"))
+            snippet = val(" | ".join(
+                val(indexed.get(key)) for key in ("snippet", "headline", "location")
+                if val(indexed.get(key))
+            ))
+            if title or snippet:
+                errors.append("using_public_search_metadata_fallback")
+                return "SearchDiscoveryFallback", {
+                    "name": title or val(indexed.get("title")) or urlparse(url).path.rstrip("/").split("/")[-1],
+                    "description": snippet,
+                    "location": val(indexed.get("location")),
+                    "url": url,
+                }, errors
         return "", None, errors
 
     for name, fn in providers:
