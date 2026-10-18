@@ -11,12 +11,44 @@ PERSONAL_PROFILES = DATA / "personal_profiles.csv"
 PERSONAL_PROFILE_FIELDS = ["platform", "public_name", "profile_url", "username", "run_id", "collected_at"]
 DATA.mkdir(exist_ok=True)
 
-# Product-first lead discovery. Defaults preserve the existing lubricant/China pilot.
+# Product-first lead discovery. Country/product are chosen manually in workflow_dispatch.
 PRODUCT_NAME = os.getenv("PRODUCT_NAME", "industrial lubricants").strip() or "industrial lubricants"
 TARGET_MARKET = os.getenv("TARGET_MARKET", "China").strip() or "China"
-BUYER_TYPES = os.getenv(
-    "BUYER_TYPES", "importers, distributors, industrial end-users, procurement companies"
-).strip() or "importers, distributors, industrial end-users, procurement companies"
+
+
+def infer_buyer_types(product):
+    """Infer the best-fit B2B customer roles from the selected product/sector."""
+    value = val(product).lower()
+    petroleum = ("petroleum", "crude oil", "fuel oil", "gasoline", "diesel", "jet fuel",
+                 "kerosene", "lpg", "lng", "bitumen", "asphalt", "base oil", "lubricant",
+                 "grease", "hydraulic oil", "gear oil", "compressor oil", "turbine oil",
+                 "paraffin", "petroleum coke", "sulfur")
+    chemicals = ("chemical", "caustic soda", "soda ash", "methanol", "ethanol", "ammonia",
+                 "urea", "chlorine", "acid", "peroxide", "solvent", "acetone", "toluene",
+                 "xylene", "glycol", "glycerin", "titanium dioxide", "carbon black", "pigment",
+                 "resin", "adhesive", "detergent", "surfactant", "water-treatment", "agrochemical")
+    petrochemicals = ("petrochemical", "ethylene", "propylene", "polyethylene", "polypropylene",
+                      "pvc", "pet resin", "polystyrene", "styrene", "butadiene", "aromatic",
+                      "pta", "paraxylene", "phenol", "acetic acid", "synthetic rubber")
+    steel = ("steel", "rebar", "wire rod", "billet", "slab", "stainless", "hot-rolled",
+             "cold-rolled", "galvanized", "color-coated", "steel pipe", "steel scrap", "structural steel")
+    renewable = ("renewable", "solar", "photovoltaic", "pv module", "inverter", "wind turbine",
+                 "battery", "bess", "green hydrogen", "electrolyzer")
+    if any(term in value for term in renewable):
+        return "renewable-energy project developers, EPC contractors, utilities, installers, equipment integrators, procurement teams"
+    if any(term in value for term in steel):
+        return "steel service centers, fabricators, construction and infrastructure contractors, machinery makers, industrial consumers, importers, procurement teams"
+    if any(term in value for term in petrochemicals):
+        return "plastics and polymer processors, converters, packaging manufacturers, chemical formulators, industrial consumers, importers, procurement teams"
+    if any(term in value for term in chemicals):
+        return "industrial consumers, formulators, manufacturers using the chemical as a raw material, importers, distributors, procurement teams"
+    if any(term in value for term in petroleum):
+        return "industrial consumers, refineries and processors where relevant, fleet and plant operators, importers, distributors, procurement teams"
+    return "direct B2B buyers, industrial consumers, raw-material consumers, importers, procurement teams, product-specific end users"
+
+
+# The system infers customer types; no manual buyer-type field is required.
+BUYER_TYPES = infer_buyer_types(PRODUCT_NAME)
 MAX_ITEMS = min(5, max(1, int(os.getenv("SOCIAL_MAX_ITEMS", "3") or "3")))
 REQUEST_INTERVAL_SECONDS = max(11.0, float(os.getenv("SOCIAL_REQUEST_INTERVAL_SECONDS", "15") or "15"))
 LAST_PROFILE_REQUEST_AT = 0.0
@@ -149,7 +181,25 @@ def firecrawl_country_code(country):
     }
     if re.fullmatch(r"[a-z]{2}", value):
         return value
-    return codes.get(value, "us")
+    aliases = {
+        "iran, islamic republic of": "ir", "russian federation": "ru",
+        "viet nam": "vn", "korea, republic of": "kr",
+        "korea, democratic people's republic of": "kp",
+        "bolivia, plurinational state of": "bo",
+        "venezuela, bolivarian republic of": "ve",
+        "moldova, republic of": "md", "tanzania, united republic of": "tz",
+        "taiwan, province of china": "tw", "palestine, state of": "ps",
+        "micronesia, federated states of": "fm",
+        "congo, the democratic republic of the": "cd",
+        "brunei darussalam": "bn", "cabo verde": "cv",
+        "côte d'ivoire": "ci", "czechia": "cz", "Türkiye".lower(): "tr",
+        "united states": "us", "united kingdom": "uk",
+        "united arab emirates": "ae", "hong kong": "hk", "macao": "mo",
+        "curaçao": "cw", "réunion": "re", "eswatini": "sz",
+        "north macedonia": "mk", "timor-leste": "tl",
+        "saint martin (french part)": "mf", "sint maarten (dutch part)": "sx",
+    }
+    return codes.get(value, aliases.get(value, ""))
 
 
 def domain(u):
@@ -1956,11 +2006,13 @@ def run_product_web_collection():
                     "user_id": account["user_id"],
                     "connected_account_id": account["id"],
                     "arguments": {
-                        "q": query,
-                        "limit": 5,
-                        "country": search_country,
-                        "lang": "en",
-                        "formats": ["links"],
+                        **{
+                            "q": query,
+                            "limit": 5,
+                            "lang": "en",
+                            "formats": ["links"],
+                        },
+                        **({"country": search_country} if search_country else {}),
                     },
                 },
                 timeout=75,
@@ -1991,7 +2043,10 @@ def run_product_web_collection():
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             },
-            json={"query": query, "limit": 5, "country": search_country, "lang": "en"},
+            json={
+                **{"query": query, "limit": 5, "lang": "en"},
+                **({"country": search_country} if search_country else {}),
+            },
             timeout=45,
         )
         if response.status_code == 402:
@@ -2183,6 +2238,9 @@ def run_product_web_collection():
             "collected_at": datetime.now(timezone.utc).isoformat(),
         }
         row.update(qualify_product_lead_with_ai(row))
+        # Use the AI's specific classification when available; otherwise keep the
+        # product-derived targeting profile and never invent a named buyer role.
+        row["buyer_type"] = row.get("ai_recommended_buyer_type") or BUYER_TYPES
         if row.get("ai_customer_fit") in {"supplier_only", "irrelevant"}:
             print(
                 "AI_PRODUCT_LEAD_REJECTED " + json.dumps({
