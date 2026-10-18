@@ -15,8 +15,8 @@ DATA.mkdir(exist_ok=True)
 PRODUCT_NAME = os.getenv("PRODUCT_NAME", "industrial lubricants").strip() or "industrial lubricants"
 TARGET_MARKET = os.getenv("TARGET_MARKET", "China").strip() or "China"
 BUYER_TYPES = os.getenv(
-    "BUYER_TYPES", "manufacturers, importers, distributors, industrial end-users"
-).strip() or "manufacturers, importers, distributors, industrial end-users"
+    "BUYER_TYPES", "importers, distributors, industrial end-users, procurement companies"
+).strip() or "importers, distributors, industrial end-users, procurement companies"
 MAX_ITEMS = min(5, max(1, int(os.getenv("SOCIAL_MAX_ITEMS", "3") or "3")))
 REQUEST_INTERVAL_SECONDS = max(11.0, float(os.getenv("SOCIAL_REQUEST_INTERVAL_SECONDS", "15") or "15"))
 LAST_PROFILE_REQUEST_AT = 0.0
@@ -1847,8 +1847,9 @@ def run_product_web_collection():
         for row in rows if val(row.get("website") or row.get("source_url"))
     }
 
-    # Use one compact query; the product, market and buyer type remain configurable.
-    query = f'{PRODUCT_NAME} manufacturers companies in {TARGET_MARKET}'
+    # Target actual buying organizations rather than defaulting to product manufacturers.
+    # Product, market, and buyer categories are supplied by the manual workflow inputs.
+    query = f'"{PRODUCT_NAME}" {BUYER_TYPES} buyers procurement purchasing in {TARGET_MARKET}'
 
     def find_result_items(node):
         if isinstance(node, list):
@@ -1931,6 +1932,17 @@ def run_product_web_collection():
 
     email_re = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
     phone_re = re.compile(r"(?<!\w)(?:\+?\d[\d ().-]{7,}\d)")
+
+    def plausible_public_phone(value):
+        digits = re.sub(r"\D", "", val(value))
+        if not 8 <= len(digits) <= 15 or len(set(digits)) <= 2:
+            return False
+        # Drop common placeholder/test numbers frequently embedded in pages.
+        if any(pattern in digits for pattern in (
+            "1234567890", "0123456789", "123123123", "00000000", "11111111", "99999999"
+        )):
+            return False
+        return True
     excluded_hosts = (
         "facebook.com", "linkedin.com", "instagram.com", "tiktok.com",
         "youtube.com", "x.com", "twitter.com", "wikipedia.org",
@@ -1994,7 +2006,10 @@ def run_product_web_collection():
             except Exception as exc:
                 print(f"FIRECRAWL_PRODUCT_SCRAPE failed safely: {type(exc).__name__}")
         item_emails = sorted(set(email_re.findall(blob)))
-        item_phones = sorted(set(phone_re.findall(blob)))
+        item_phones = sorted({
+            candidate for candidate in phone_re.findall(blob)
+            if plausible_public_phone(candidate)
+        })
         company = re.split(r"\s+[|–—-]\s+", title, maxsplit=1)[0].strip() or host
         row = {
             "company_name": company[:200],
@@ -2016,6 +2031,17 @@ def run_product_web_collection():
             "collected_at": datetime.now(timezone.utc).isoformat(),
         }
         row.update(qualify_product_lead_with_ai(row))
+        if row.get("ai_customer_fit") in {"supplier_only", "irrelevant"}:
+            print(
+                "AI_PRODUCT_LEAD_REJECTED " + json.dumps({
+                    "company": company[:160],
+                    "fit": row.get("ai_customer_fit"),
+                    "confidence": row.get("ai_confidence"),
+                    "reason": row.get("ai_reason", "")[:300],
+                    "source_url": url,
+                }, ensure_ascii=False)
+            )
+            continue
         rows.append(row)
         seen_domains.add(host)
         added += 1
