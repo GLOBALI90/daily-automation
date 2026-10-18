@@ -386,7 +386,7 @@ on:
           - "5"
         default: "3"
       outreach_enabled:
-        description: "Enable outbound email and WhatsApp delivery. Leave off to collect/review leads without sending."
+        description: "Social mode only: enable email/WhatsApp delivery. Product-web mode sends automatically only to AI-cleared, high-confidence buyers with a public email verified on the official site."
         required: false
         type: boolean
         default: false
