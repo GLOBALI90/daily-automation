@@ -2264,8 +2264,11 @@ def run_product_web_collection():
         # product-derived targeting profile and never invent a named buyer role.
         row["buyer_type"] = row.get("ai_recommended_buyer_type") or BUYER_TYPES
         if row.get("ai_customer_fit") in {"supplier_only", "irrelevant"}:
+            # Temporary observation mode: retain AI-labelled candidates in the
+            # dataset so we can inspect real collection results before restoring
+            # qualification gates one at a time.
             print(
-                "AI_PRODUCT_LEAD_REJECTED " + json.dumps({
+                "AI_PRODUCT_LEAD_LABEL_ONLY " + json.dumps({
                     "company": company[:160],
                     "fit": row.get("ai_customer_fit"),
                     "confidence": row.get("ai_confidence"),
@@ -2273,7 +2276,6 @@ def run_product_web_collection():
                     "source_url": url,
                 }, ensure_ascii=False)
             )
-            continue
         rows.append(row)
         seen_domains.add(host)
         added += 1
