@@ -118,6 +118,40 @@ def val(x):
     return str(x).strip()
 
 
+def firecrawl_country_code(country):
+    """Map common target-market names to Firecrawl's ISO-2 country filter."""
+    value = re.sub(r"\s+", " ", val(country)).strip().lower()
+    codes = {
+        "china": "cn", "turkey": "tr", "türkiye": "tr",
+        "united states": "us", "united states of america": "us", "usa": "us", "us": "us",
+        "united kingdom": "uk", "great britain": "uk", "uk": "uk",
+        "india": "in", "germany": "de", "france": "fr", "italy": "it",
+        "spain": "es", "canada": "ca", "australia": "au", "japan": "jp",
+        "south korea": "kr", "korea": "kr", "indonesia": "id", "vietnam": "vn",
+        "thailand": "th", "pakistan": "pk", "bangladesh": "bd", "malaysia": "my",
+        "singapore": "sg", "netherlands": "nl", "belgium": "be", "poland": "pl",
+        "mexico": "mx", "egypt": "eg", "iran": "ir", "russia": "ru",
+        "south africa": "za", "nigeria": "ng", "brazil": "br", "argentina": "ar",
+        "chile": "cl", "colombia": "co", "taiwan": "tw", "hong kong": "hk",
+        "kazakhstan": "kz", "uzbekistan": "uz", "qatar": "qa", "oman": "om",
+        "iraq": "iq", "afghanistan": "af", "switzerland": "ch", "austria": "at",
+        "sweden": "se", "norway": "no", "denmark": "dk", "finland": "fi",
+        "portugal": "pt", "greece": "gr", "czechia": "cz", "czech republic": "cz",
+        "romania": "ro", "hungary": "hu", "ukraine": "ua", "uae": "ae",
+        "united arab emirates": "ae", "saudi arabia": "sa", "new zealand": "nz",
+        "philippines": "ph", "sri lanka": "lk", "nepal": "np", "israel": "il",
+        "morocco": "ma", "kenya": "ke", "ethiopia": "et", "peru": "pe",
+        "venezuela": "ve", "ecuador": "ec", "serbia": "rs", "croatia": "hr",
+        "slovakia": "sk", "slovenia": "si", "bulgaria": "bg", "lithuania": "lt",
+        "latvia": "lv", "estonia": "ee", "ireland": "ie", "iceland": "is",
+        "luxembourg": "lu", "cyprus": "cy", "malta": "mt", "georgia": "ge",
+        "armenia": "am", "azerbaijan": "az",
+    }
+    if re.fullmatch(r"[a-z]{2}", value):
+        return value
+    return codes.get(value, "us")
+
+
 def domain(u):
     try:
         return urlparse(u).netloc.lower().replace("www.", "")
@@ -1859,13 +1893,29 @@ def run_product_web_collection():
         for row in rows if val(row.get("website") or row.get("source_url"))
     }
 
-    # Search for organizations that purchase/use the product, not just its makers.
+    # Search for buyers with a country-localized Firecrawl query.
     # All three dimensions are driven by manual workflow inputs.
     query = (
-        f'{TARGET_MARKET} companies that buy or use "{PRODUCT_NAME}" '
-        f'{BUYER_TYPES} procurement purchasing factory industrial end-user website contact '
-        '-market-research -market-size -forecast'
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" {BUYER_TYPES} '
+        'buyers importers distributors factories procurement industrial end users company contact'
     )
+
+    # The workflow checks in every three hours, but external discovery is paced to
+    # every third scheduled run so the configured monthly Firecrawl credit limit lasts.
+    event_name = os.getenv("GITHUB_EVENT_NAME", "").strip().lower()
+    if event_name == "schedule" and GITHUB_RUN_NUMBER % 3 != 0:
+        PRODUCT_LEADS.parent.mkdir(parents=True, exist_ok=True)
+        with PRODUCT_LEADS.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=PRODUCT_LEAD_FIELDS, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        print(
+            f"FIRECRAWL_PRODUCT_SEARCH skipped: scheduled_budget_pacing; "
+            f"run_number={GITHUB_RUN_NUMBER}; next_discovery_run=multiple_of_3"
+        )
+        return
+
+    search_country = firecrawl_country_code(TARGET_MARKET)
 
     def find_result_items(node):
         if isinstance(node, list):
@@ -1904,7 +1954,13 @@ def run_product_web_collection():
                 json={
                     "user_id": account["user_id"],
                     "connected_account_id": account["id"],
-                    "arguments": {"q": query, "limit": 10, "formats": ["markdown"]},
+                    "arguments": {
+                        "q": query,
+                        "limit": 5,
+                        "country": search_country,
+                        "lang": "en",
+                        "formats": ["links"],
+                    },
                 },
                 timeout=75,
             )
@@ -1934,7 +1990,7 @@ def run_product_web_collection():
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             },
-            json={"query": query, "limit": 10},
+            json={"query": query, "limit": 5, "country": search_country, "lang": "en"},
             timeout=45,
         )
         if response.status_code == 402:
@@ -1998,7 +2054,7 @@ def run_product_web_collection():
         # Search-only runs cost about 2 credits; this averages ~2.33 credits/run.
         scrape_attempted = False
         scrape_succeeded = False
-        if GITHUB_RUN_NUMBER > 0 and GITHUB_RUN_NUMBER % 3 == 0 and FIRECRAWL_SCRAPES_THIS_RUN < MAX_FIRECRAWL_SCRAPES_PER_RUN:
+        if GITHUB_RUN_NUMBER > 0 and GITHUB_RUN_NUMBER % 9 == 0 and FIRECRAWL_SCRAPES_THIS_RUN < MAX_FIRECRAWL_SCRAPES_PER_RUN:
             FIRECRAWL_SCRAPES_THIS_RUN += 1
             scrape_attempted = True
             try:
