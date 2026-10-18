@@ -2042,8 +2042,6 @@ def run_product_web_collection():
     public search result itself contains them.
     """
     global FIRECRAWL_SEARCHES_THIS_RUN, FIRECRAWL_SCRAPES_THIS_RUN
-    if not FIRECRAWL_API_KEY:
-        raise RuntimeError("FIRECRAWL_API_KEY missing; product_web mode fails closed")
 
     rows = []
     if PRODUCT_LEADS.exists():
@@ -2172,35 +2170,37 @@ def run_product_web_collection():
         except Exception as exc:
             print(f"CLOUDFLARE_PUBLIC_SEARCH failed safely: {type(exc).__name__}: {str(exc)[:180]}")
 
-    if not items:
+    if not items and FIRECRAWL_API_KEY:
         search_provider = "Direct Firecrawl fallback"
-        if not FIRECRAWL_API_KEY:
-            raise RuntimeError("No usable Composio product results and FIRECRAWL_API_KEY missing")
         if FIRECRAWL_SEARCHES_THIS_RUN >= MAX_FIRECRAWL_SEARCHES_PER_RUN:
             print("FIRECRAWL_PRODUCT_SEARCH blocked: per_run_cap_reached")
-            return
-        FIRECRAWL_SEARCHES_THIS_RUN += 1
-        response = session.post(
-            "https://api.firecrawl.dev/v2/search",
-            headers={
-                "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-            json={
-                **{"query": query, "limit": 5, "lang": "en"},
-                **({"country": search_country} if search_country else {}),
-            },
-            timeout=45,
-        )
-        if response.status_code == 402:
-            print("FIRECRAWL_PRODUCT_SEARCH stopped: credit_limit_reached_http_402; no retries")
-            return
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict) or payload.get("success") is False:
-            raise RuntimeError("Firecrawl product search returned an unsuccessful response")
-        items = find_result_items(payload.get("data") or payload.get("results") or payload)
+        else:
+            FIRECRAWL_SEARCHES_THIS_RUN += 1
+            response = session.post(
+                "https://api.firecrawl.dev/v2/search",
+                headers={
+                    "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                json={
+                    **{"query": query, "limit": 5, "lang": "en"},
+                    **({"country": search_country} if search_country else {}),
+                },
+                timeout=45,
+            )
+            if response.status_code == 402:
+                print("FIRECRAWL_PRODUCT_SEARCH stopped: credit_limit_reached_http_402; no retries")
+                response = None
+            if response is not None:
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict) or payload.get("success") is False:
+                    raise RuntimeError("Firecrawl product search returned an unsuccessful response")
+                items = find_result_items(payload.get("data") or payload.get("results") or payload)
+    elif not items:
+        search_provider = "No usable search provider"
+        print("PRODUCT_WEB_DISCOVERY_NO_RESULTS: Composio and Cloudflare returned no candidates; direct Firecrawl key not configured")
 
     # Use the already-configured Exa key as a bounded secondary discovery source.
     # Its shared monthly counter caps this fallback at 20 searches across modes.
