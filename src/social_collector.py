@@ -1812,7 +1812,8 @@ def qualify_product_lead_with_ai(row):
         from gemini_utils import generate_text
         prompt = f"""You qualify potential B2B customers for an international trade company.
 Assess whether this organization is plausibly a real business customer for the specified product in the specified market.
-Do not assume that a supplier/manufacturer is a buyer; distinguish likely buyers, distributors/importers, manufacturers who may consume the product, and irrelevant organizations.
+Be strict about buyer versus competitor. If an organization primarily manufactures, brands, markets, or sells the same target product, classify it as supplier_only even if it imports or distributes products; only classify it as a customer when evidence supports buying third-party products for resale or consuming the product in its own operations. A brand affiliate or product seller is not a target customer without explicit procurement/buying evidence.
+Distinguish likely buyers, possible buyers, suppliers/competitors, and irrelevant organizations.
 Use only the evidence below. If evidence is thin or only a search snippet, say so. Never invent contact details or company facts.
 Target product: {row.get('product_interest', '')}
 Target country/market: {row.get('country', '')}
@@ -2065,7 +2066,12 @@ def run_product_web_collection():
     phone_re = re.compile(r"(?<!\w)(?:\+?\d[\d ().-]{7,}\d)")
 
     def plausible_public_phone(value):
-        digits = re.sub(r"\D", "", val(value))
+        raw_value = val(value).strip()
+        if re.fullmatch(r"(?:19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}", raw_value):
+            return False
+        if re.fullmatch(r"\d{1,2}[-/.][A-Za-z]{3}[-/.]\d{2,4}", raw_value):
+            return False
+        digits = re.sub(r"\D", "", raw_value)
         if not 8 <= len(digits) <= 15 or len(set(digits)) <= 2:
             return False
         # Drop common placeholder/test numbers frequently embedded in pages.
@@ -2149,7 +2155,14 @@ def run_product_web_collection():
             candidate for candidate in phone_re.findall(blob)
             if plausible_public_phone(candidate)
         })
-        company = re.split(r"\s+[|–—-]\s+", title, maxsplit=1)[0].strip() or host
+        title_parts = re.split(r"\s+[|–—-]\s+", title, maxsplit=1)
+        company = title_parts[0].strip() or host
+        generic_page_titles = {
+            "about us", "home", "contact", "contact us", "products",
+            "our company", "company profile", "welcome", "who we are",
+        }
+        if len(title_parts) > 1 and company.lower() in generic_page_titles:
+            company = title_parts[1].strip() or host
         row = {
             "company_name": company[:200],
             "website": website,
