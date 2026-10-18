@@ -25,7 +25,7 @@ on:
         description: "Customer types to prioritize, comma-separated"
         required: true
         type: string
-        default: "manufacturers, importers, distributors, industrial end-users"
+        default: "importers, distributors, industrial end-users, procurement companies"
       social_platform:
         description: "Collect public pages from the selected networks; save relevant LinkedIn people as account-only records"
         required: false
