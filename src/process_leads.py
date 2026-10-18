@@ -98,7 +98,7 @@ PRICE POSITIONING RULES:
 PERSONALIZATION RULES:
 - Tailor the opening and value proposition to the company's industry, product interest, location and evidence.
 - Focus on the selected product interest ({row.get('product_interest','')}) and the buyer's evidenced industry/use case. Do not introduce unrelated products.
-- Do not introduce steel, generic chemicals, fuel or unrelated products into this pilot message.
+- Do not introduce products outside the selected product focus or the lead's evidenced use case.
 - Mention only products that are supported by the row or by the company's stated business; do not force a product into an irrelevant lead.
 - Focus on business outcomes: lower procurement cost, alternative sourcing, supply continuity and reduced sourcing friction.
 - Keep the email professional, natural and direct. Avoid exaggerated marketing language.
@@ -333,6 +333,8 @@ def main_product_outreach():
         except (TypeError, ValueError):
             confidence = 0
         if confidence < 85:
+            continue
+        if row.get("ai_review_status") != "ai_screened_review_before_outreach":
             continue
         # Search-result snippets alone are not enough for automatic outbound contact.
         if row.get("verification_status") != "official_domain_scraped_needs_review":
