@@ -396,7 +396,8 @@ on:
         type: boolean
         default: false
 
-  # Workflow checks every three hours; product discovery is budget-paced to every third scheduled run. Product outreach is auto-gated by AI fit, confidence, official-site verification, and a matching public business email.
+  # Workflow checks every three hours; product discovery is budget-paced to every third scheduled run.
+  # Composio is primary, Cloudflare Browser is a capped web/Google Maps fallback, and direct Firecrawl is last-resort.
   schedule:
     - cron: "0 */3 * * *"
 
@@ -430,7 +431,7 @@ jobs:
       - name: Test social provider fallback and response quality
         run: python -m unittest discover -s tests -v
 
-      - name: Collect product customers (bounded direct Firecrawl) or social leads
+      - name: Collect product prospects (Composio, capped Cloudflare web/Maps, Firecrawl fallback) or social leads
         if: ${{ !inputs.validation_only }}
         env:
           PRODUCT_NAME: ${{ inputs.custom_product || inputs.product_name || 'industrial lubricants' }}
