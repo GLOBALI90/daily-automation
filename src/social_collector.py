@@ -1473,20 +1473,24 @@ def provider_chain(p, url):
                         f"fields={json.dumps(extracted, ensure_ascii=False)}"
                     )
                     continue
-                if not relevant_social_profile(
+                relevant = relevant_social_profile(
                     p, normalized[9] or url, company, web, loc, bio
-                ):
+                )
+                strict_relevance = os.getenv("SOCIAL_STRICT_RELEVANCE", "false").strip().lower() in ("1", "true", "yes", "on")
+                if not relevant and strict_relevance:
                     errors.append(f"{name}:profile_not_relevant_to_target")
                     print(
                         f"Social provider response rejected as irrelevant: {name}; "
                         f"platform={p}; fields={json.dumps(extracted, ensure_ascii=False)}"
                     )
-                    # A provider has already returned enough profile data to
-                    # classify this URL as outside the pilot. Re-fetching the
-                    # same URL through the metered Worker cannot make it relevant.
                     if name == "ScrapeCreators":
                         return "", None, errors
                     continue
+                if not relevant:
+                    print(
+                        f"SOCIAL_RELEVANCE_OBSERVATION provider={name}; platform={p}; "
+                        "strict_filter=disabled; candidate_retained_for_observation"
+                    )
             except Exception as exc:
                 errors.append(f"{name}:normalization_error:{type(exc).__name__}")
                 print(f"Social provider normalization failed: {name} | {type(exc).__name__}: {exc}")
@@ -1512,6 +1516,24 @@ def provider_chain(p, url):
                 print("Cloudflare daily cap detected; skipping paid provider fallbacks.")
                 return "", None, errors
 
+    # Preserve public search evidence when enrichment providers fail. This is a
+    # discovery fallback, not proof of buyer fit; only explicitly published
+    # contact details found in the snippet may be used for outreach.
+    if p == "linkedin":
+        indexed = LINKEDIN_SEARCH_RESULTS.get(url.rstrip("/"), {})
+        title = val(indexed.get("current_company") or indexed.get("title"))
+        snippet = val(" | ".join(
+            val(indexed.get(key)) for key in ("snippet", "headline", "location")
+            if val(indexed.get(key))
+        ))
+        if title or snippet:
+            errors.append("using_public_search_metadata_fallback")
+            return "SearchDiscoveryFallback", {
+                "name": title or val(indexed.get("title")) or urlparse(url).path.rstrip("/").split("/")[-1],
+                "description": snippet,
+                "location": val(indexed.get("location")),
+                "url": url,
+            }, errors
     return "", None, errors
 
 
@@ -1623,14 +1645,35 @@ def _first_profile_value(nodes, aliases):
 
 
 def normalize_cloudflare_profile(platform, data, fallback):
+    # Some Worker responses wrap profile fields as JSON/text strings instead of
+    # nested objects. Decode JSON wrappers before walking the response.
+    def decode_wrappers(value, depth=0):
+        if depth > 5:
+            return value
+        if isinstance(value, dict):
+            decoded = {}
+            for key, child in value.items():
+                if isinstance(child, str) and child.strip().startswith(("{", "[")):
+                    try:
+                        child = json.loads(child)
+                    except (TypeError, ValueError):
+                        pass
+                decoded[key] = decode_wrappers(child, depth + 1) if isinstance(child, (dict, list)) else child
+            return decoded
+        if isinstance(value, list):
+            return [decode_wrappers(child, depth + 1) if isinstance(child, (dict, list)) else child for child in value]
+        return value
+
+    data = decode_wrappers(data)
     nodes = list(_profile_dicts(data))
     name = _first_profile_value(nodes, (
         "name", "pageName", "page_name", "displayName", "display_name",
-        "title", "fullName", "full_name", "username", "handle"
+        "title", "fullName", "full_name", "username", "handle",
+        "company", "companyName", "company_name", "organization"
     ))
     website = _first_profile_value(nodes, (
         "website", "websiteUrl", "website_url", "externalUrl", "external_url",
-        "link", "web_url"
+        "link", "web_url", "companyWebsite", "company_website", "domain"
     ))
     location = _first_profile_value(nodes, (
         "address", "location", "city", "currentCity", "current_city"
@@ -1644,7 +1687,9 @@ def normalize_cloudflare_profile(platform, data, fallback):
     ))
     bio = _first_profile_value(nodes, (
         "description", "about", "intro", "bio", "biography", "pageIntro",
-        "page_intro", "headline", "category", "services"
+        "page_intro", "headline", "category", "services", "content", "text",
+        "markdown", "pageContent", "page_content", "rawText", "raw_text",
+        "summary", "snippet"
     ))
     followers = _first_profile_value(nodes, (
         "followersCount", "followers_count", "followerCount", "follower_count",
@@ -1663,7 +1708,17 @@ def normalize_provider(p, provider, data, fallback):
     if provider == "CloudflareDeepBackup":
         return normalize_cloudflare_profile(p, data, fallback)
 
-    if provider == "CloudflareDeepBackup" and isinstance(data, dict):
+    if provider == "SearchDiscoveryFallback":
+        x = data if isinstance(data, dict) else {}
+        name = val(x.get("name"))
+        bio = val(x.get("description") or x.get("snippet") or x.get("content"))
+        email = _first_profile_value([x], ("email", "public_email", "contact_email"))
+        phone = _first_profile_value([x], ("phone", "phone_number", "contact_phone"))
+        website = val(x.get("website"))
+        location = val(x.get("location"))
+        return name, website, location, name, email, phone, bio, "", "", val(x.get("url")) or fallback
+
+    if isinstance(data, dict):
         # Workers may wrap profile data in one of these common response fields.
         data = data.get("data") or data.get("result") or data.get("profile") or data
         if isinstance(data, dict) and isinstance(data.get("result"), dict):
@@ -2552,11 +2607,15 @@ def main():
             "returned_url_present": bool(returned_url)
         }, ensure_ascii=False))
 
-        if not relevant_social_profile(p, surl or url, company, web, loc, bio):
+        relevant = relevant_social_profile(p, surl or url, company, web, loc, bio)
+        strict_relevance = os.getenv("SOCIAL_STRICT_RELEVANCE", "false").strip().lower() in ("1", "true", "yes", "on")
+        if not relevant and strict_relevance:
             profile_audit_row["outcome"] = "rejected_not_relevant"
             print(f"Rejected low-confidence social result: platform={p}; discovered_url={url}; returned_profile_url={returned_url or 'NOT_RETURNED'}")
             continue
-        profile_audit_row["outcome"] = "accepted_relevant"
+        profile_audit_row["outcome"] = "accepted_relevant" if relevant else "retained_observation_mode"
+        if not relevant:
+            print(f"SOCIAL_RELEVANCE_OBSERVATION platform={p}; strict_filter=disabled; candidate_retained_for_observation; url={url}")
 
         if (p, surl.rstrip("/")) in seen:
             continue
