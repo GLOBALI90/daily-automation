@@ -12,6 +12,40 @@ import time
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Backwards-compatible constants used by the legacy SearXNG fallback module.
+# The primary production workflow uses src/social_collector.py; these names keep
+# the legacy parser importable and allow its isolated parser tests to run.
+HEADERS = {"User-Agent": "rozhanglobal-lead-collector/1.0"}
+RESULTS_PER_QUERY = 10
+
+
+def looks_like_reject(company_name, url="", snippet="", query=""):
+    """Reject editorial/search-directory pages, not genuine company profiles.
+
+    This compatibility filter is intentionally conservative: market/location
+    evidence can appear in the search query or company name rather than snippet.
+    """
+    name = str(company_name or "").strip().lower()
+    page_url = str(url or "").strip().lower()
+    description = str(snippet or "").strip().lower()
+    editorial_phrases = (
+        "industry guide", "buying guide", "supplier directory",
+        "company directory", "list of suppliers", "top suppliers",
+        "best suppliers", "market report", "industry report",
+        "news article", "press release", "blog post",
+    )
+    if any(phrase in name for phrase in editorial_phrases):
+        return True
+    if any(part in page_url for part in ("/industry-guide", "/buying-guide", "/directory", "/news/", "/blog/", "/articles/")):
+        return True
+    combined = " ".join((name, description))
+    if name.startswith(("top ", "best ")) and any(
+        term in combined for term in ("supplier", "manufacturer", "company", "companies")
+    ):
+        return True
+    return False
+
+
 class OptimizedLeadCollector:
     def __init__(self, config_path="config/company.json"):
         self.config_path = config_path
