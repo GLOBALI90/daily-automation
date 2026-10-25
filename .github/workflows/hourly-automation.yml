@@ -4,13 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       collection_mode:
-        description: "Choose product-web customer discovery or legacy social-page collection"
+        description: "This repository collects only public LinkedIn and Facebook pages"
         required: true
         type: choice
         options:
-          - product_web
           - social
-        default: product_web
+        default: social
       product_name:
         description: "Choose a product from ROZHAN GLOBAL's trading sectors; use custom_product for anything not listed"
         required: true
@@ -429,23 +428,14 @@ jobs:
       - name: Test social provider fallback and response quality
         run: python -m unittest discover -s tests -v
 
-      - name: Collect product prospects (Composio, capped Cloudflare web/Maps, Firecrawl fallback) or social leads
+      - name: Collect LinkedIn and Facebook social leads only
         if: ${{ !inputs.validation_only }}
         env:
           PRODUCT_NAME: ${{ inputs.custom_product || inputs.product_name || 'industrial lubricants' }}
           TARGET_MARKET: ${{ inputs.target_market || 'China' }}
-          COLLECTION_MODE: ${{ inputs.collection_mode || 'product_web' }}
-          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.6-flash' }}
-          COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
-          COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID: ${{ vars.COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID || 'firecrawl_eurite-sext' }}
-          COMPOSIO_USER_ID: 'GLOBALI90'
-          CLOUDFLARE_PRIMARY_ENRICHMENT: 'true'
+          COLLECTION_MODE: ${{ inputs.collection_mode || 'social' }}
           APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
-          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
-          SOCIAL_DEEP_BACKUP_TOKEN: ${{ secrets.SOCIAL_DEEP_BACKUP_TOKEN }}
-          SOCIAL_DEEP_BACKUP_URL: ${{ vars.SOCIAL_DEEP_BACKUP_URL || 'https://patient-moon-b87e.mohamadsbrfit760li.workers.dev' }}
+          SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
           SOCIAL_PLATFORM: ${{ inputs.social_platform || 'auto' }}
           SOCIAL_MAX_ITEMS: ${{ inputs.social_max_items || '3' }}
           SOCIAL_REQUEST_INTERVAL_SECONDS: '15'
