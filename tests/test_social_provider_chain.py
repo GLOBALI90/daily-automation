@@ -110,7 +110,7 @@ class ProviderChainTests(unittest.TestCase):
                 "Importer and distributor of titanium dioxide",
             ))
 
-    def test_facebook_profile_enrichment_uses_cloudflare_only(self):
+    def test_facebook_profile_enrichment_uses_social_provider_only(self):
         valid_profile = (
             "Example Industrial Lubricants Company",
             "https://example.cn",
@@ -125,10 +125,9 @@ class ProviderChainTests(unittest.TestCase):
         )
 
         with (
-            patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
-            patch.object(social, "CLOUDFLARE_CALLS_THIS_RUN", 0),
-            patch.object(social, "cloudflare_profile", return_value={"name": "Example Industrial Lubricants Company"}) as cf,
-            patch.object(social, "scrapecreators_profile") as sc,
+            patch.object(social, "SCRAPECREATORS", "test-api-key"),
+            patch.object(social, "scrapecreators_profile", return_value={"name": "Example Industrial Lubricants Company"}) as sc,
+            patch.object(social, "cloudflare_profile") as cf,
             patch.object(social, "normalize_provider", return_value=valid_profile),
             patch.object(social, "relevant_social_profile", return_value=True),
         ):
@@ -136,11 +135,11 @@ class ProviderChainTests(unittest.TestCase):
                 "facebook", "https://www.facebook.com/example"
             )
 
-        self.assertEqual(provider, "CloudflareDeepBackup")
+        self.assertEqual(provider, "ScrapeCreators")
         self.assertTrue(data)
         self.assertEqual(errors, [])
-        cf.assert_called_once()
-        sc.assert_not_called()
+        sc.assert_called_once()
+        cf.assert_not_called()
 
     def test_brave_search_backup_parses_only_public_facebook_pages(self):
         class Response:
@@ -214,39 +213,16 @@ class ProviderChainTests(unittest.TestCase):
         apify.assert_called_once_with("linkedin", url)
         cf.assert_not_called()
 
-    def test_cloudflare_search_fallback_runs_when_native_discovery_is_empty(self):
-        class Response:
-            status_code = 200
-            text = ""
-
-            def json(self):
-                return {
-                    "success": True,
-                    "results": [{
-                        "platform": "facebook",
-                        "candidates": [
-                            "https://www.facebook.com/example-lubricants"
-                        ],
-                        "candidate_count": 1,
-                    }],
-                }
-
+    def test_no_cloudflare_search_fallback_when_native_discovery_is_empty(self):
         with (
-            patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
-            patch.object(social, "CLOUDFLARE_CALLS_THIS_RUN", 0),
-            patch.object(social, "CLOUDFLARE_SEARCH_USED_THIS_RUN", False),
-            patch.object(social, "LAST_CLOUDFLARE_REQUEST_AT", 0.0),
+            patch.object(social, "NATIVE_QUERIES", {"facebook": ["native query"]}),
             patch.object(social, "native_candidates", return_value=[]),
-            patch.object(social.session, "post", return_value=Response()) as post,
+            patch.object(social.session, "post") as post,
         ):
             found = social.discover("facebook")
 
-        self.assertEqual(len(found), 1)
-        self.assertEqual(found[0][0], "https://www.facebook.com/example-lubricants")
-        self.assertEqual(found[0][2], "cloudflare_browser_search_fallback")
-        post.assert_called_once()
-        self.assertTrue(post.call_args.args[0].endswith("/search"))
-        self.assertEqual(post.call_args.kwargs["json"]["platform"], "facebook")
+        self.assertEqual(found, [])
+        post.assert_not_called()
 
     def test_auto_falls_back_to_linkedin_when_facebook_has_no_candidates(self):
         linkedin_result = [(
@@ -400,34 +376,23 @@ class ProviderChainTests(unittest.TestCase):
             0,
         )
 
-    def test_facebook_uses_one_bounded_google_fallback_for_public_pages(self):
+    def test_facebook_search_never_falls_back_to_google(self):
         ad_library_empty = {"searchResults": []}
-        google_results = {
-            "results": [{
-                "url": "https://www.facebook.com/jiangsuindustriallubricants",
-                "title": "Jiangsu Industrial Lubricants Manufacturer",
-                "description": "Factory producing industrial lubricating oil in Jiangsu, China",
-            }]
-        }
         with (
             patch.object(social, "SCRAPECREATORS", "test-api-key"),
-            patch.object(social, "FACEBOOK_GOOGLE_SEARCH_USED_THIS_RUN", False),
-            patch.object(
-                social, "_scrapecreators_get",
-                side_effect=[ad_library_empty, google_results, ad_library_empty],
-            ) as mocked_get,
+            patch.object(social, "_scrapecreators_get", return_value=ad_library_empty) as mocked_get,
         ):
             first = social._facebook_native_candidates("industrial lubricant manufacturer")
             second = social._facebook_native_candidates("industrial lubricant manufacturer")
 
-        self.assertEqual(len(first), 1)
-        self.assertIn("facebook.com", first[0]["url"])
-        self.assertGreater(
-            social.social_candidate_score("facebook", first[0], first[0]["url"]), 0
-        )
+        self.assertEqual(first, [])
         self.assertEqual(second, [])
         paths = [call.args[0] for call in mocked_get.call_args_list]
-        self.assertEqual(paths.count("/v1/google/search"), 1)
+        self.assertEqual(paths, [
+            "/v1/facebook/adLibrary/search/companies",
+            "/v1/facebook/adLibrary/search/companies",
+        ])
+        self.assertNotIn("/v1/google/search", paths)
 
     def test_discovery_rejects_candidates_without_china_evidence(self):
         candidate = {
@@ -538,36 +503,23 @@ class ProviderChainTests(unittest.TestCase):
         )
         self.assertGreater(score, 0)
 
-    def test_worker_search_fallback_tops_up_partial_native_discovery(self):
+    def test_worker_search_fallback_does_not_top_up_native_discovery(self):
         native = {
             "url": "https://www.linkedin.com/company/jiangsu-lubricants",
             "title": "Jiangsu Industrial Lubricants Factory",
             "content": "Industrial lubricant manufacturer in Jiangsu China",
         }
-        class Response:
-            status_code = 200
-            text = ""
-            def json(self):
-                return {"success": True, "results": [{
-                    "platform": "linkedin",
-                    "candidates": ["https://www.linkedin.com/company/another-lubricant"],
-                }]}
-
         with (
             patch.object(social, "NATIVE_QUERIES", {"linkedin": ["query one"]}),
-            patch.object(social, "CLOUDFLARE_TOKEN", "test-token"),
-            patch.object(social, "CLOUDFLARE_CALLS_THIS_RUN", 0),
-            patch.object(social, "CLOUDFLARE_SEARCH_USED_THIS_RUN", False),
-            patch.object(social, "LAST_CLOUDFLARE_REQUEST_AT", 0.0),
             patch.object(social, "native_candidates", return_value=[native]),
-            patch.object(social.session, "post", return_value=Response()) as post,
+            patch.object(social.session, "post") as post,
         ):
             found = social.discover("linkedin")
 
-        self.assertEqual(len(found), 2)
-        self.assertTrue(any(item[0].endswith("another-lubricant") for item in found))
-        post.assert_called_once()
-
+        self.assertEqual(len(found), 1)
+        self.assertTrue(found[0][0].endswith("jiangsu-lubricants"))
+        self.assertEqual(found[0][2], "native_linkedin_social_search")
+        post.assert_not_called()
 
     def test_extract_public_email_and_labeled_whatsapp_from_bio(self):
         email, whatsapp, phone = social.extract_public_contacts(
@@ -673,7 +625,7 @@ class ProviderChainTests(unittest.TestCase):
         self.assertEqual(len(found), 2)
         self.assertEqual(post.call_args.kwargs["json"]["platform"], "both")
 
-    def test_discover_uses_cloudflare_primary_and_skips_known_urls_before_enrichment(self):
+    def test_discover_ignores_legacy_cloudflare_primary_results(self):
         known = "https://www.linkedin.com/company/known-lubricants"
         new = "https://www.linkedin.com/company/new-lubricants"
         with (
@@ -693,9 +645,8 @@ class ProviderChainTests(unittest.TestCase):
         ):
             found = social.discover("linkedin")
 
-        self.assertEqual(len(found), 1)
-        self.assertEqual(found[0][0], new)
-        self.assertEqual(found[0][2], "cloudflare_browser_search_primary")
+        self.assertEqual(found, [])
+        self.assertEqual(social.DUPLICATE_PREFILTER_SKIPPED, 0)
 
     def test_cloudflare_worker_request_cap_is_enforced_per_run(self):
         with (
