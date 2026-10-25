@@ -2542,8 +2542,8 @@ def main():
     print(
         "GOOGLE_SHEETS_READ_OK "
         f"leads_rows={len(rows)}; personal_profile_rows={len(profile_rows)}; "
-        f"leads_columns={len(rows[0]) if rows else len(fields)}; "
-        f"profiles_columns={len(profile_rows[0]) if profile_rows else len(PERSONAL_PROFILE_FIELDS)}"
+        f"lead_row_columns={len(rows[0]) if rows else 0}; "
+        f"profile_row_columns={len(profile_rows[0]) if profile_rows else 0}"
     )
     print(
         f"EXISTING_STATE_LOADED company_social_keys={len(EXISTING_SOCIAL_KEYS)}; "
