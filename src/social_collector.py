@@ -268,13 +268,33 @@ INDUSTRY_TERMS = (
     "润滑油", "工业润滑油", "润滑脂", "工业润滑脂", "润滑剂",
     "润滑油厂家", "润滑油生产", "润滑油制造商", "润滑脂生产厂家"
 )
-# Keep the detailed legacy synonym set for the default pilot; arbitrary products
-# use their supplied phrase and meaningful tokens instead of lubricant-only gates.
-if PRODUCT_NAME.lower() in ("industrial lubricants", "industrial lubricant", "lubricating oil"):
-    PRODUCT_TERMS = INDUSTRY_TERMS
-else:
-    _product_tokens = [token for token in re.findall(r"[a-zA-Z0-9\u4e00-\u9fff]+", PRODUCT_NAME.lower()) if len(token) > 2]
-    PRODUCT_TERMS = tuple(dict.fromkeys([PRODUCT_NAME.lower(), *_product_tokens]))
+# Product-aware vocabulary. The selected workflow product controls search terms;
+# synonyms improve recall without requiring every term in a profile snippet.
+PRODUCT_SYNONYM_GROUPS = [
+    (("petroleum products", "crude oil", "fuel oil", "gasoline", "petrol", "diesel", "gasoil", "jet fuel", "aviation fuel", "kerosene", "lpg", "lng", "bitumen", "asphalt", "base oil", "industrial lubricant", "lubricating oil", "industrial grease", "automotive lubricant", "hydraulic oil", "gear oil", "compressor oil", "turbine oil", "metalworking fluid", "paraffin wax", "petroleum coke", "sulfur"),
+     ("petroleum", "oil products", "refinery", "refined products", "petroleum products", "crude oil", "fuel oil", "gasoline", "petrol", "diesel", "gasoil", "jet fuel", "aviation fuel", "kerosene", "LPG", "liquefied petroleum gas", "LNG", "liquefied natural gas", "bitumen", "asphalt", "road binder", "base oil", "lubricant", "lubricating oil", "industrial grease", "hydraulic oil", "gear oil", "compressor oil", "turbine oil", "metalworking fluid", "paraffin wax", "petroleum coke", "petcoke", "sulfur", "sulphur", "石油", "沥青", "润滑油", "基础油", "石油焦", "硫")),
+    (("chemicals", "caustic soda", "soda ash", "methanol", "ethanol", "ammonia", "urea", "chlorine", "hydrochloric acid", "sulfuric acid", "hydrogen peroxide", "solvent", "acetone", "toluene", "xylene", "ethylene glycol", "glycerin", "titanium dioxide", "carbon black", "pigment", "resin", "adhesive", "detergent", "surfactant", "water-treatment", "agrochemical"),
+     ("chemical", "chemicals", "industrial chemical", "chemical manufacturer", "chemical producer", "chemical distributor", "caustic soda", "sodium hydroxide", "soda ash", "sodium carbonate", "methanol", "ethanol", "ammonia", "urea", "chlorine", "hydrochloric acid", "sulfuric acid", "sulphuric acid", "hydrogen peroxide", "solvent", "acetone", "toluene", "xylene", "ethylene glycol", "glycerin", "titanium dioxide", "carbon black", "pigment", "resin", "adhesive", "detergent", "surfactant", "water treatment", "agrochemical", "化工", "烧碱", "纯碱", "甲醇", "乙醇", "尿素", "双氧水")),
+    (("petrochemicals", "ethylene", "propylene", "polyethylene", "polypropylene", "pvc", "pet resin", "polystyrene", "styrene", "butadiene", "aromatics", "pta", "paraxylene", "phenol", "acetic acid", "synthetic rubber", "monoethylene glycol", "meg"),
+     ("petrochemical", "petrochemicals", "petrochemical feedstock", "ethylene", "propylene", "polyethylene", "PE resin", "polypropylene", "PP resin", "PVC", "PET resin", "polystyrene", "styrene monomer", "butadiene", "aromatics", "PTA", "paraxylene", "phenol", "acetic acid", "synthetic rubber", "MEG", "石化", "聚乙烯", "聚丙烯", "聚氯乙烯")),
+    (("steel", "rebar", "wire rod", "billet", "slab", "stainless", "hot-rolled", "cold-rolled", "galvanized", "color-coated", "steel pipe", "steel scrap", "structural steel", "flat steel"),
+     ("steel", "steel products", "steel mill", "steel manufacturer", "steel service center", "rebar", "reinforcing bar", "wire rod", "billet", "slab", "stainless steel", "hot-rolled coil", "cold-rolled coil", "galvanized steel", "pre-painted steel", "color-coated steel", "steel pipe", "steel tube", "steel scrap", "structural steel", "flat steel", "钢材", "钢铁", "螺纹钢", "不锈钢")),
+    (("renewable energy", "solar", "photovoltaic", "pv module", "solar cell", "inverter", "wind turbine", "battery", "bess", "green hydrogen", "electrolyzer"),
+     ("renewable energy", "solar", "solar panel", "photovoltaic", "PV module", "solar cell", "solar inverter", "mounting structure", "wind turbine", "wind-turbine components", "battery energy storage", "BESS", "lithium-ion battery", "green hydrogen", "electrolyzer", "electrolyser", "可再生能源", "光伏", "太阳能", "储能", "风电")),
+    (("industrial lubricants", "industrial lubricant", "lubricating oil", "industrial greases", "industrial grease", "automotive lubricants", "automotive lubricant", "hydraulic oils", "hydraulic oil", "gear oils", "gear oil", "compressor oils", "compressor oil", "turbine oils", "turbine oil", "metalworking fluids", "metalworking fluid"),
+     INDUSTRY_TERMS + ("lubricant blender", "lubricant blending plant", "lubricant distributor", "润滑油", "润滑脂", "工业润滑油")),
+]
+_product_name_lower = PRODUCT_NAME.lower()
+_product_tokens = [token for token in re.findall(r"[a-zA-Z0-9\\u4e00-\\u9fff]+", _product_name_lower) if len(token) > 2]
+_selected_synonyms = []
+for _keys, _synonyms in PRODUCT_SYNONYM_GROUPS:
+    if any(_key in _product_name_lower for _key in _keys):
+        _selected_synonyms.extend(_synonyms)
+# Custom products retain their exact name and meaningful tokens without inheriting
+# unrelated product-family terms.
+PRODUCT_TERMS = tuple(dict.fromkeys(
+    [PRODUCT_NAME.lower(), *_product_tokens, *[term.lower() for term in _selected_synonyms]]
+))
 COMPANY_TERMS = (
     "company", "group", "limited", "ltd", "manufacturer", "manufacturing",
     "factory", "supplier", "production", "importer", "exporter", "refinery",
@@ -350,16 +370,29 @@ def relevant_social_profile(platform, url, company, website, location, bio):
     return product_match and buyer_match
 
 
+def product_search_terms(limit=8):
+    """Return a compact selected-product vocabulary for provider-native queries."""
+    terms = []
+    for term in PRODUCT_TERMS:
+        cleaned = val(term)
+        if cleaned and cleaned.lower() not in {PRODUCT_NAME.lower(), TARGET_MARKET.lower()} and cleaned not in terms:
+            terms.append(cleaned)
+        if len(terms) >= limit:
+            break
+    return " ".join(f'"{term}"' if " " in term else term for term in terms)
+
+
+PRODUCT_QUERY_TERMS = product_search_terms()
 NATIVE_QUERIES = {
     "linkedin": [
-        f'{TARGET_MARKET} "{PRODUCT_NAME}" {BUYER_TYPES} company',
-        f'{TARGET_MARKET} "{PRODUCT_NAME}" procurement purchasing sourcing',
-        f'{TARGET_MARKET} "{PRODUCT_NAME}" supplier importer distributor',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" {PRODUCT_QUERY_TERMS} company manufacturer',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" {PRODUCT_QUERY_TERMS} procurement purchasing buyer',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" {PRODUCT_QUERY_TERMS} importer distributor end user',
     ],
     "facebook": [
-        f'{TARGET_MARKET} "{PRODUCT_NAME}" {BUYER_TYPES}',
-        f'{TARGET_MARKET} "{PRODUCT_NAME}" company website contact',
-        f'{TARGET_MARKET} "{PRODUCT_NAME}" supplier importer distributor',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" {PRODUCT_QUERY_TERMS} company manufacturer',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" {PRODUCT_QUERY_TERMS} industrial buyer',
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" {PRODUCT_QUERY_TERMS} importer distributor contact',
     ],
 }
 
@@ -804,7 +837,7 @@ def native_candidates(platform, query):
 
 
 def personal_profile_candidate_score(result, url):
-    """Score public LinkedIn people only when China, industry and role evidence exists."""
+    """Rank public LinkedIn people by signals without an all-signals rejection gate."""
     if not urlparse(url).path.lower().startswith("/in/"):
         return 0
     text = " ".join([
@@ -812,21 +845,16 @@ def personal_profile_candidate_score(result, url):
         val(result.get("headline")), val(result.get("current_company")),
         val(result.get("location")), url
     ]).lower()
-    if not any(term in text for term in PRODUCT_TERMS):
-        return 0
-    if not any(term in text for term in MARKET_SIGNALS):
-        return 0
-    # A role mentioned only in a post can describe somebody else. Require the
-    # buyer/decision-maker evidence in public author identity metadata instead.
     role_text = " ".join([
         val(result.get("title")), val(result.get("headline")),
         val(result.get("current_company"))
     ]).lower()
-    if not any(term in role_text for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS):
-        return 0
-    return 10 + sum(1 for term in MARKET_SIGNALS if term in text) + sum(
-        1 for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS if term in role_text
-    )
+    product_hits = sum(1 for term in PRODUCT_TERMS if term and term in text)
+    market_hits = sum(1 for term in MARKET_SIGNALS if term and term in text)
+    role_hits = sum(1 for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS if term and term in role_text)
+    # Provider-native queries are scoped to the selected product/market. Public
+    # snippets often omit one signal, so evidence affects ranking rather than admission.
+    return 1 + min(product_hits, 10) * 5 + min(market_hits, 5) * 2 + min(role_hits, 5) * 3
 
 
 def save_personal_profile(platform, url, public_name=""):
@@ -857,18 +885,18 @@ def save_personal_profile(platform, url, public_name=""):
 
 
 def social_candidate_score(platform, result, url):
+    """Rank public social candidates; relevance signals are not hard rejection gates."""
     title = val(result.get("title"))
     snippet = val(result.get("content") or result.get("snippet") or result.get("description"))
     text = " ".join([title, snippet, url]).lower()
     if platform == "linkedin" and urlparse(url).path.lower().startswith("/in/"):
         return personal_profile_candidate_score(result, url)
-    lubricant_hits = sum(1 for term in PRODUCT_TERMS if term in text)
-    buyer_hits = sum(1 for term in BUYER_TYPE_TERMS if term in text)
-    market_hits = sum(1 for term in MARKET_SIGNALS if term in text)
-    # Require product, buyer-type and target-market evidence in the candidate itself.
-    if not lubricant_hits or not buyer_hits or not market_hits:
-        return 0
-    return lubricant_hits * 5 + buyer_hits * 3 + market_hits * 2
+    product_hits = sum(1 for term in PRODUCT_TERMS if term and term in text)
+    buyer_hits = sum(1 for term in BUYER_TYPE_TERMS if term and term in text)
+    market_hits = sum(1 for term in MARKET_SIGNALS if term and term in text)
+    # Provider-native queries are scoped to the selected product/market. Snippets
+    # may omit either signal, so score evidence rather than requiring all three.
+    return 1 + min(product_hits, 10) * 5 + min(buyer_hits, 5) * 2 + min(market_hits, 5) * 2
 
 
 def pace_cloudflare_request():
