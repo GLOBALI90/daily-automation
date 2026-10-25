@@ -2434,7 +2434,7 @@ def main():
         print("No new Facebook or LinkedIn candidates found after checking stored records")
         write_run_report(
             platforms_to_collect, 0, 0,
-            {"Apify": 0, "CloudflareDeepBackup": 0, "failed": 0},
+            {"ScrapeCreators": 0, "Apify": 0, "failed": 0},
             "no_new_candidates"
         )
         print(
@@ -2472,8 +2472,8 @@ def main():
 
     added = 0
     provider_counts = {
+        "ScrapeCreators": 0,
         "Apify": 0,
-        "CloudflareDeepBackup": 0,
         "failed": 0
     }
 
@@ -2641,14 +2641,13 @@ def main():
         w.writerows(rows)
 
     print(
-        f"CLOUDFLARE_STATUS token_configured={bool(CLOUDFLARE_TOKEN)}; "
-        f"calls={CLOUDFLARE_CALLS_THIS_RUN}/{MAX_CLOUDFLARE_CALLS_PER_RUN}; "
-        "supported_platforms=linkedin,facebook; cloudflare_scope=facebook_only_when_apify_configured"
+        "SOCIAL_ONLY_PROVIDER_STATUS supported_platforms=linkedin,facebook; "
+        "generic_web_search=false; google_maps=false; cloudflare_search=false; "
+        "firecrawl=false; exa=false; composio_firecrawl=false"
     )
     print(
         f"Social collection: platforms={','.join(platforms_to_collect)}; "
         f"discovered_candidates={len(found)}; added={added}; target_cap={MAX_ITEMS}; "
-        f"cloudflare_calls={CLOUDFLARE_CALLS_THIS_RUN}/{MAX_CLOUDFLARE_CALLS_PER_RUN}; "
         f"providers={json.dumps(provider_counts, ensure_ascii=False)}"
     )
     write_run_report(platforms_to_collect, len(found), added, provider_counts, "completed")
