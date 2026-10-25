@@ -363,8 +363,8 @@ NATIVE_QUERIES = {
 }
 
 DISCOVERY_METHODS = {
-    "linkedin": "apify_linkedin_company_search",
-    "facebook": "cloudflare_facebook_public_page_search",
+    "linkedin": "native_linkedin_social_search",
+    "facebook": "native_facebook_social_search",
 }
 
 
@@ -385,7 +385,7 @@ def _scrapecreators_get(path, params):
 
 
 def _facebook_native_candidates(query):
-    # First search the public Facebook Ad Library company/page index.
+    """Search only Facebook's own public page/ad-library index; never use Google."""
     data = _scrapecreators_get(
         "/v1/facebook/adLibrary/search/companies", {"query": query}
     )
@@ -401,56 +401,16 @@ def _facebook_native_candidates(query):
             url = f"https://www.facebook.com/{alias}/"
         if not url and page_id:
             url = f"https://www.facebook.com/{page_id}"
-        if not url:
+        if not url or not good("facebook", url):
             continue
         out.append({
             "url": url,
             "title": val(item.get("page_name") or item.get("name") or alias),
-            # Never inject the search query into evidence: it can make an
-            # unrelated page appear to match China/industry filters.
             "content": val(item.get("description") or item.get("about") or
                            item.get("category") or item.get("category_name")),
+            "search_provider": "ScrapeCreators Facebook Page Search",
         })
-    if out:
-        return out
-
-    # Ad Library company search is not a general Facebook Page search. If it
-    # has no match, make one bounded Google-index fallback per run (1 credit),
-    # restricted to public Facebook URLs. The query itself is never evidence.
-    global FACEBOOK_GOOGLE_SEARCH_USED_THIS_RUN
-    if FACEBOOK_GOOGLE_SEARCH_USED_THIS_RUN:
-        return []
-    FACEBOOK_GOOGLE_SEARCH_USED_THIS_RUN = True
-    google_query = (
-        f'site:facebook.com "{PRODUCT_NAME}" "{TARGET_MARKET}" '
-        f'({BUYER_TYPES}) company website contact'
-    )
-    google_data = _scrapecreators_get(
-        "/v1/google/search", {"query": google_query, "region": "CN", "page": 1}
-    )
-    google_items = google_data.get("results") or []
-    for item in google_items:
-        if not isinstance(item, dict):
-            continue
-        url = val(item.get("url"))
-        if not url or not good("facebook", url):
-            continue
-        if any(part in urlparse(url).path.lower() for part in (
-            "/posts/", "/photos/", "/videos/", "/reel/", "/reels/",
-            "/watch", "/groups/", "/events/", "/marketplace/", "/story.php",
-            "/permalink.php", "/login"
-        )):
-            continue
-        out.append({
-            "url": url,
-            "title": val(item.get("title")),
-            "content": val(item.get("description") or item.get("snippet")),
-            "search_provider": "ScrapeCreators Google Search",
-        })
-    print(
-        f"Facebook public page search fallback: google_used=true; "
-        f"results={len(google_items)}; facebook_candidates={len(out)}"
-    )
+    print(f"Facebook native page search: candidates={len(out)}; web_search_used=false")
     return out
 
 
@@ -1196,144 +1156,66 @@ def composio_search_candidates(platform, query):
 
 
 def discover(p):
-    """Use Composio Firecrawl first, then bounded backup providers."""
+    """Discover candidates exclusively through LinkedIn/Facebook-specific providers."""
     global DUPLICATE_PREFILTER_SKIPPED
-    last_error = None
     ranked_by_url = {}
     personal_by_url = {}
+    last_error = None
 
-    # Composio candidates have first priority; Cloudflare search results remain a backup.
-    for item in COMPOSIO_PRIMARY_RESULTS.get(p, []):
-        u = val(item.get("url")).rstrip("/")
-        if not u or not good(p, u):
-            continue
-        if is_existing_candidate(p, u):
-            DUPLICATE_PREFILTER_SKIPPED += 1
-            print(f"Skipping previously stored Composio candidate before enrichment: platform={p}; url={u}")
-            continue
-        is_personal = p == "linkedin" and urlparse(u).path.lower().startswith("/in/")
-        target = personal_by_url if is_personal else ranked_by_url
-        target[u] = (1000, u, CLOUDFLARE_PRIMARY_QUERY, "composio_firecrawl_search_primary")
-
-    # Cloudflare search is a secondary discovery source; enrichment remains the Worker stage.
-    for item in CLOUDFLARE_PRIMARY_RESULTS.get(p, []):
-        u = val(item.get("url")).rstrip("/")
-        if not u or not good(p, u):
-            continue
-        if is_existing_candidate(p, u):
-            DUPLICATE_PREFILTER_SKIPPED += 1
-            print(f"Skipping previously stored candidate before enrichment: platform={p}; url={u}")
-            continue
-        is_personal = p == "linkedin" and urlparse(u).path.lower().startswith("/in/")
-        target = personal_by_url if is_personal else ranked_by_url
-        target[u] = (1000, u, CLOUDFLARE_PRIMARY_QUERY, "cloudflare_browser_search_primary")
-
-    # Cloudflare remains primary. Use an independent web index only to
-    # top up a short result set, before the existing social-specific providers.
-    # Exa is a card-free monthly-credit backup. Usage is committed with run data;
-    # fail closed at 100 requests/month to keep the free allowance conservative.
-    if len(ranked_by_url) < MAX_ITEMS and EXA_API_KEY and p == "facebook":
-        try:
-            backup_results = _exa_search_candidates(p, NATIVE_QUERIES[p][0])
-            for item in backup_results:
-                u = val(item.get("url")).rstrip("/")
-                if not u or not good(p, u) or is_existing_candidate(p, u):
-                    continue
-                score = social_candidate_score(p, item, u)
-                if not score:
-                    print(
-                        f"Exa Search candidate rejected by strict qualification: "
-                        f"platform={p}; url={u}"
-                    )
-                    continue
-                candidate = (score, u, NATIVE_QUERIES[p][0], "exa_search_api_backup")
-                current = ranked_by_url.get(u)
-                if current is None or score > current[0]:
-                    ranked_by_url[u] = candidate
-        except Exception as exc:
-            print(
-                f"Exa Search backup failed: platform={p}; "
-                f"error={type(exc).__name__}: {exc}"
-            )
-
-    for q in NATIVE_QUERIES[p]:
+    for query in NATIVE_QUERIES[p]:
         if len(ranked_by_url) >= MAX_ITEMS and (
             p != "linkedin" or len(personal_by_url) >= 3
         ):
             break
         try:
-            results = native_candidates(p, q)
+            results = native_candidates(p, query)
         except Exception as exc:
             last_error = exc
-            print(f"Native social discovery failed: platform={p}; method={DISCOVERY_METHODS[p]}; error={type(exc).__name__}: {exc}")
+            print(
+                f"Native social discovery failed: platform={p}; "
+                f"method={DISCOVERY_METHODS[p]}; error={type(exc).__name__}: {exc}"
+            )
             continue
 
         for item in results:
-            u = val(item.get("url")).rstrip("/")
-            if not u or not good(p, u):
+            url = val(item.get("url")).rstrip("/")
+            if not url or not good(p, url):
                 continue
-            if is_existing_candidate(p, u):
+            if is_existing_candidate(p, url):
                 DUPLICATE_PREFILTER_SKIPPED += 1
-                print(f"Skipping previously stored candidate before enrichment: platform={p}; url={u}")
+                print(f"Skipping previously stored social candidate: platform={p}; url={url}")
                 continue
-            score = social_candidate_score(p, item, u)
+            score = social_candidate_score(p, item, url)
             if not score:
                 continue
-            is_personal = p == "linkedin" and urlparse(u).path.lower().startswith("/in/")
+            is_personal = p == "linkedin" and urlparse(url).path.lower().startswith("/in/")
             target = personal_by_url if is_personal else ranked_by_url
-            current = target.get(u)
-            candidate = (score, u, q, DISCOVERY_METHODS[p])
+            current = target.get(url)
+            candidate = (score, url, query, DISCOVERY_METHODS[p])
             if current is None or score > current[0]:
-                target[u] = candidate
-
-        # Keep the company lead quota independent from account-only people.
-        # Continue role-led LinkedIn searches until both buckets have useful
-        # candidates or the bounded query list is exhausted.
-        if len(ranked_by_url) >= MAX_ITEMS and (
-            p != "linkedin" or len(personal_by_url) >= 3
-        ):
-            break
+                target[url] = candidate
 
     ranked = sorted(ranked_by_url.values(), key=lambda item: item[0], reverse=True)
     personal_ranked = sorted(personal_by_url.values(), key=lambda item: item[0], reverse=True)
-
-    # The Worker has a real /search route, separate from its /collect profile
-    # route. Use it only when native discovery yields no relevant candidates.
-    # Candidate URLs from this fallback are not trusted as leads until profile
-    # enrichment and the strict China/manufacturer relevance check both pass.
-    if len(ranked) < MAX_ITEMS and CLOUDFLARE_TOKEN and (p != "linkedin" or not APIFY) and not CLOUDFLARE_SEARCH_USED_THIS_RUN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
-        fallback_query = NATIVE_QUERIES[p][0]
-        try:
-            fallback_results = cloudflare_search_candidates(p, fallback_query)
-            for item in fallback_results:
-                url = val(item.get("url"))
-                if url and good(p, url):
-                    ranked_by_url.setdefault(
-                        url,
-                        (1, url, fallback_query, "cloudflare_browser_search_fallback"),
-                    )
-            ranked = sorted(ranked_by_url.values(), key=lambda item: item[0], reverse=True)
-        except Exception as exc:
-            print(
-                f"Cloudflare discovery fallback failed: platform={p}; "
-                f"error={type(exc).__name__}: {exc}"
-            )
-
-    # Gather a small candidate pool from each enabled platform. Final profile
-    # validation remains strict; the main loop stops after five accepted leads.
     selected = ranked[:MAX_ITEMS]
     selected_people = personal_ranked[:3] if p == "linkedin" else []
     if selected or selected_people:
-        method = (selected[0][3] if selected else selected_people[0][3])
+        method = selected[0][3] if selected else selected_people[0][3]
         print(
             f"Native social discovery ranking: platform={p}; method={method}; "
             f"company_candidates={len(ranked)}; selected_for_enrichment={len(selected)}; "
-            f"personal_account_candidates={len(selected_people)}; "
-            f"top_score={(selected[0][0] if selected else selected_people[0][0])}"
+            f"personal_account_candidates={len(selected_people)}"
         )
     elif last_error:
-        print(f"Social discovery ended without candidates: platform={p}; last_error={type(last_error).__name__}: {last_error}")
-    return [(u, q, method) for _, u, q, method in selected + selected_people]
+        print(
+            f"Social discovery ended without candidates: platform={p}; "
+            f"last_error={type(last_error).__name__}: {last_error}"
+        )
+    print(f"SOCIAL_ONLY_GUARD platform={p}; external_web_search_used=false; maps_used=false")
+    return (
+        [(score, url, query, method) for score, url, query, method in selected]
+        + [(score, url, query, method) for score, url, query, method in selected_people]
+    )
 
 def get_json(url, headers=None, params=None, timeout=45):
     r = session.get(
@@ -1482,21 +1364,14 @@ def pace_profile_enrichment(platform):
 
 def provider_chain(p, url):
     errors = []
-
-    # Cloudflare performs the first profile/contact enrichment attempt when enabled.
-    # Apify is a backup for LinkedIn; the Worker action cap is always respected.
     if p not in ("linkedin", "facebook"):
         return "", None, [f"unsupported_platform:{p}"]
 
+    # Profile enrichment is restricted to social-network-specific endpoints.
+    # No Cloudflare browser, Google/Maps, Firecrawl, Exa, or generic web fallback.
     providers = []
-    if CLOUDFLARE_TOKEN and CLOUDFLARE_PRIMARY_ENRICHMENT:
-        if CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
-            providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
-        else:
-            errors.append("CloudflareDeepBackup:cloudflare_per_run_cap_reached")
-    elif p == "facebook" and CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
-        providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
-
+    if SCRAPECREATORS:
+        providers.append(("ScrapeCreators", lambda: scrapecreators_profile(p, url)))
     if p == "linkedin" and APIFY:
         providers.append(("Apify", lambda: apify_profile(p, url)))
     if not providers:
@@ -1572,16 +1447,6 @@ def provider_chain(p, url):
         except Exception as e:
             errors.append(f"{name}:{e}")
             print(f"Social provider failed: {name} | {e}")
-            # Do not spend paid fallback quota to bypass an explicit Worker cap.
-            error_text = str(e).lower()
-            if name == "CloudflareDeepBackup" and (
-                "cloudflare_http_429" in error_text
-                or "daily limit" in error_text
-                or "quota exceeded" in error_text
-                or "limit reached" in error_text
-            ):
-                print("Cloudflare daily cap detected; skipping paid provider fallbacks.")
-                return "", None, errors
 
     # Preserve public search evidence when enrichment providers fail. This is a
     # discovery fallback, not proof of buyer fit; only explicitly published
@@ -1929,15 +1794,15 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "existing_social_records_checked": len(EXISTING_SOCIAL_KEYS),
         "existing_personal_profiles_checked": len(EXISTING_PERSONAL_KEYS),
         "duplicates_skipped_before_enrichment": DUPLICATE_PREFILTER_SKIPPED,
-        "cloudflare_primary_discovery": bool(CLOUDFLARE_TOKEN),
+        "cloudflare_primary_discovery": False,
+        "collection_scope": "linkedin_facebook_only",
+        "generic_web_search_enabled": False,
+        "google_maps_enabled": False,
         "provider_counts": provider_counts,
         "cloudflare": {
-            "token_configured": bool(CLOUDFLARE_TOKEN),
-            "calls_used": CLOUDFLARE_CALLS_THIS_RUN,
-            "per_run_cap": MAX_CLOUDFLARE_CALLS_PER_RUN,
-            "worker_daily_browser_action_cap": 4,
-            "minimum_worker_action_interval_seconds": 11,
-            "requests": CLOUDFLARE_AUDIT
+            "token_used": False,
+            "calls_used": 0,
+            "requests": []
         },
         "profile_fetch_results": PROFILE_AUDIT,
         "personal_profiles_saved_this_run": sum(
@@ -2476,8 +2341,13 @@ def run_product_web_collection():
 
 
 def main():
-    if COLLECTION_MODE == "product_web":
-        run_product_web_collection()
+    # This repository is intentionally social-only. Fail closed if an old
+    # workflow or environment variable attempts to invoke the former web mode.
+    if COLLECTION_MODE != "social":
+        print(
+            f"COLLECTION_MODE_BLOCKED mode={COLLECTION_MODE!r}; "
+            "this repository supports only LinkedIn/Facebook social collection."
+        )
         return
 
     # Always create the account-only CSV with a stable header, even when no
@@ -2523,51 +2393,17 @@ def main():
         f"personal_profile_keys={len(EXISTING_PERSONAL_KEYS)}"
     )
 
-    # Composio Firecrawl is the primary discovery stage for both requested networks.
+    # Search only within the requested social networks using native provider APIs.
+    # Do not call Composio Firecrawl, Google, Exa, Cloudflare /search, or Maps.
     is_auto = PLATFORM not in PLATFORMS
     platforms_to_collect = AUTO_PLATFORMS if is_auto else [PLATFORM]
     for target in ("linkedin", "facebook"):
         COMPOSIO_PRIMARY_RESULTS[target] = []
         CLOUDFLARE_PRIMARY_RESULTS[target] = []
-
-    if COMPOSIO_API_KEY:
-        for target_platform in platforms_to_collect:
-            try:
-                COMPOSIO_PRIMARY_RESULTS[target_platform] = composio_search_candidates(
-                    target_platform, CLOUDFLARE_PRIMARY_QUERY
-                )
-            except Exception as exc:
-                print(
-                    f"Composio primary discovery failed; continuing with bounded backups: "
-                    f"platform={target_platform}; {type(exc).__name__}: {exc}"
-                )
-    else:
-        print("COMPOSIO_PRIMARY_SKIPPED: COMPOSIO_API_KEY missing; bounded backups remain available")
-
-    # Cloudflare /search is a bounded discovery backup only; /collect is used for profile/contact enrichment.
-    if CLOUDFLARE_TOKEN and PLATFORM != "linkedin" and not any(COMPOSIO_PRIMARY_RESULTS.values()):
-        try:
-            primary_platform = "facebook" if is_auto else PLATFORM
-            primary_candidates = cloudflare_search_candidates(
-                primary_platform, CLOUDFLARE_PRIMARY_QUERY
-            )
-            for candidate in primary_candidates:
-                candidate_platform = val(candidate.get("platform")).lower()
-                if candidate_platform in CLOUDFLARE_PRIMARY_RESULTS:
-                    CLOUDFLARE_PRIMARY_RESULTS[candidate_platform].append(candidate)
-            print(
-                "CLOUDFLARE_DISCOVERY_BACKUP "
-                + json.dumps({
-                    "requested_platform": primary_platform,
-                    "linkedin_candidates": len(CLOUDFLARE_PRIMARY_RESULTS["linkedin"]),
-                    "facebook_candidates": len(CLOUDFLARE_PRIMARY_RESULTS["facebook"]),
-                }, ensure_ascii=False)
-            )
-        except Exception as exc:
-            print(
-                f"Cloudflare discovery backup failed; using other bounded providers: "
-                f"{type(exc).__name__}: {exc}"
-            )
+    print(
+        "SOCIAL_ONLY_MODE enabled=true; "
+        "platforms=linkedin,facebook; generic_web_search=false; google_maps=false"
+    )
 
     found = []
     for target_platform in platforms_to_collect:
