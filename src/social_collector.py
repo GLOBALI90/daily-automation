@@ -1879,8 +1879,8 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
             1 for item in PROFILE_AUDIT if item.get("outcome") == "personal_account_saved"
         ),
         "notes": [
-            "Public LinkedIn company pages, qualifying public LinkedIn personal profiles, and public Facebook pages only.",
-            "HTTP success does not guarantee usable public profile fields.",
+            "Public LinkedIn company pages, public LinkedIn personal profiles returned by product-scoped searches, and public Facebook pages only.",
+            "Relevance signals are used for ranking/audit only; incomplete snippets do not block candidate collection.",
             "Outbound email and WhatsApp delivery are controlled by the workflow outreach_enabled input.",
             "Personal LinkedIn rows contain only public profile identity and provenance; no contact fields are stored."
         ]
@@ -2543,7 +2543,7 @@ def main():
     provider_counts = {
         "ScrapeCreators": 0,
         "Apify": 0,
-        "failed": 0
+        "failed": len(DISCOVERY_ERRORS)
     }
 
     personal_profiles_added = 0
