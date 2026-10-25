@@ -257,24 +257,129 @@ def good(p, u):
         for x in ["/search", "/explore", "/hashtag", "/jobs"]
     )
 
-# Strict pilot target: manufacturers and producers of industrial lubricants in China.
-# No automotive parts, generic chemicals, consumer products, or unrelated lead collection.
-INDUSTRY_TERMS = (
-    "industrial lubricant", "industrial lubricants", "lubricant manufacturer",
-    "lubricants manufacturer", "lubricating oil", "lubricating oils",
-    "lubricating grease", "industrial grease", "grease manufacturer",
-    "metalworking fluid", "hydraulic oil", "gear oil", "compressor oil",
-    "turbine oil", "industrial oil manufacturer", "lubricant blending",
-    "润滑油", "工业润滑油", "润滑脂", "工业润滑脂", "润滑剂",
-    "润滑油厂家", "润滑油生产", "润滑油制造商", "润滑脂生产厂家"
-)
-# Keep the detailed legacy synonym set for the default pilot; arbitrary products
-# use their supplied phrase and meaningful tokens instead of lubricant-only gates.
-if PRODUCT_NAME.lower() in ("industrial lubricants", "industrial lubricant", "lubricating oil"):
-    PRODUCT_TERMS = INDUSTRY_TERMS
-else:
-    _product_tokens = [token for token in re.findall(r"[a-zA-Z0-9\u4e00-\u9fff]+", PRODUCT_NAME.lower()) if len(token) > 2]
-    PRODUCT_TERMS = tuple(dict.fromkeys([PRODUCT_NAME.lower(), *_product_tokens]))
+# Product-aware synonyms for every product family exposed in workflow_dispatch.
+# The selected product determines discovery vocabulary; custom products retain their
+# own phrase/tokens rather than falling back to a lubricant-only filter.
+PRODUCT_SYNONYMS = {
+    "petroleum products — all": ("petroleum", "crude oil", "fuel oil", "gasoline", "diesel", "gasoil", "jet fuel", "kerosene", "lpg", "lng", "bitumen", "asphalt", "base oil", "lubricant", "paraffin", "petroleum coke", "sulfur"),
+    "crude oil": ("crude oil", "crude petroleum", "crude", "原油"),
+    "fuel oil": ("fuel oil", "bunker fuel", "marine fuel", "residual fuel", "燃料油"),
+    "gasoline / petrol": ("gasoline", "petrol", "motor gasoline", "汽油"),
+    "diesel / gasoil": ("diesel", "gasoil", "gas oil", "diesel fuel", "柴油"),
+    "jet fuel / aviation fuel": ("jet fuel", "aviation fuel", "aviation kerosene", "航空燃油"),
+    "kerosene": ("kerosene", "paraffin oil", "煤油"),
+    "lpg": ("lpg", "liquefied petroleum gas", "propane", "butane"),
+    "lng": ("lng", "liquefied natural gas"),
+    "bitumen / asphalt": ("bitumen", "asphalt", "paving bitumen", "road bitumen", "asphalt binder", "沥青"),
+    "base oils": ("base oil", "base oils", "lubricant base stock", "lube base oil", "基础油"),
+    "industrial lubricants": ("industrial lubricant", "industrial lubricants", "lubricating oil", "lubricating oils", "industrial grease", "hydraulic oil", "gear oil", "compressor oil", "turbine oil", "metalworking fluid", "润滑油", "工业润滑油", "润滑脂"),
+    "industrial greases": ("industrial grease", "lubricating grease", "lithium grease", "calcium grease", "润滑脂"),
+    "automotive lubricants": ("automotive lubricant", "automotive lubricants", "engine oil", "motor oil", "transmission fluid", "vehicle lubricant", "汽车润滑油"),
+    "hydraulic oils": ("hydraulic oil", "hydraulic fluid", "液压油"),
+    "gear oils": ("gear oil", "industrial gear lubricant", "gear lubricant", "齿轮油"),
+    "compressor oils": ("compressor oil", "air compressor lubricant", "压缩机油"),
+    "turbine oils": ("turbine oil", "turbine lubricant", "汽轮机油"),
+    "metalworking fluids": ("metalworking fluid", "cutting fluid", "cutting oil", "machining coolant", "金属加工液"),
+    "paraffin wax": ("paraffin wax", "fully refined paraffin", "semi refined paraffin", "石蜡"),
+    "petroleum coke": ("petroleum coke", "petcoke", "calcined petroleum coke", "石油焦"),
+    "sulfur": ("sulfur", "sulphur", "granular sulfur", "硫磺"),
+    "chemicals — all": ("industrial chemical", "specialty chemical", "caustic soda", "soda ash", "methanol", "ethanol", "ammonia", "urea", "chlorine", "hydrochloric acid", "sulfuric acid", "hydrogen peroxide", "solvent", "acetone", "toluene", "xylene", "ethylene glycol", "glycerin", "titanium dioxide", "carbon black", "pigment", "resin", "adhesive", "surfactant", "water treatment chemical", "agrochemical"),
+    "industrial chemicals": ("industrial chemical", "industrial chemicals", "chemical manufacturer", "chemical supplier", "化工"),
+    "specialty chemicals": ("specialty chemical", "speciality chemical", "performance chemical", "fine chemical"),
+    "caustic soda": ("caustic soda", "sodium hydroxide", "lye", "烧碱", "氢氧化钠"),
+    "soda ash": ("soda ash", "sodium carbonate", "纯碱"),
+    "methanol": ("methanol", "methyl alcohol", "甲醇"),
+    "ethanol": ("ethanol", "ethyl alcohol", "乙醇"),
+    "ammonia": ("ammonia", "anhydrous ammonia", "ammonia solution", "氨"),
+    "urea": ("urea", "carbamide", "尿素"),
+    "chlorine": ("chlorine", "chlorine gas", "氯气"),
+    "hydrochloric acid": ("hydrochloric acid", "muriatic acid", "hcl", "盐酸"),
+    "sulfuric acid": ("sulfuric acid", "sulphuric acid", "h2so4", "硫酸"),
+    "hydrogen peroxide": ("hydrogen peroxide", "peroxide", "h2o2", "双氧水"),
+    "industrial solvents": ("industrial solvent", "industrial solvents", "solvent supplier", "solvent manufacturer"),
+    "acetone": ("acetone", "propanone", "丙酮"),
+    "toluene": ("toluene", "methylbenzene", "甲苯"),
+    "xylene": ("xylene", "dimethylbenzene", "二甲苯"),
+    "ethylene glycol": ("ethylene glycol", "monoethylene glycol", "meg", "乙二醇"),
+    "glycerin": ("glycerin", "glycerine", "glycerol", "甘油"),
+    "titanium dioxide": ("titanium dioxide", "tio2", "titanium white", "钛白粉"),
+    "carbon black": ("carbon black", "industrial carbon black", "炭黑"),
+    "pigments": ("industrial pigment", "pigment manufacturer", "inorganic pigment", "organic pigment", "颜料"),
+    "resins": ("resin", "resins", "resin manufacturer", "polymer resin"),
+    "adhesives": ("adhesive", "adhesives", "industrial adhesive", "glue manufacturer"),
+    "detergents and surfactants": ("detergent", "detergents", "surfactant", "surfactants", "surface active agent"),
+    "water-treatment chemicals": ("water treatment chemical", "water-treatment chemical", "boiler water chemical", "cooling water treatment"),
+    "agrochemicals": ("agrochemical", "agrochemicals", "crop protection", "pesticide", "herbicide", "fungicide"),
+    "petrochemicals — all": ("petrochemical", "ethylene", "propylene", "polyethylene", "polypropylene", "pvc", "pet resin", "polystyrene", "styrene", "butadiene", "aromatics", "pta", "paraxylene", "phenol", "acetic acid", "synthetic rubber", "石化"),
+    "ethylene": ("ethylene", "ethene", "乙烯"),
+    "propylene": ("propylene", "propene", "丙烯"),
+    "polyethylene (pe)": ("polyethylene", "polyethylene resin", "pe resin", "hdpe", "ldpe", "lldpe", "聚乙烯"),
+    "polypropylene (pp)": ("polypropylene", "pp resin", "polypropylene resin", "聚丙烯"),
+    "pvc resin": ("pvc resin", "polyvinyl chloride", "pvc", "聚氯乙烯"),
+    "pet resin": ("pet resin", "polyethylene terephthalate", "pet resin manufacturer"),
+    "polystyrene (ps)": ("polystyrene", "ps resin", "eps", "hips", "聚苯乙烯"),
+    "styrene monomer": ("styrene monomer", "styrene", "苯乙烯"),
+    "butadiene": ("butadiene", "1,3-butadiene", "丁二烯"),
+    "aromatics": ("aromatics", "aromatic hydrocarbons", "benzene", "toluene", "xylene"),
+    "monoethylene glycol (meg)": ("monoethylene glycol", "meg", "ethylene glycol", "乙二醇"),
+    "purified terephthalic acid (pta)": ("purified terephthalic acid", "pta", "terephthalic acid", "精对苯二甲酸"),
+    "paraxylene": ("paraxylene", "p-xylene", "para-xylene", "对二甲苯"),
+    "phenol": ("phenol", "carbolic acid", "苯酚"),
+    "acetic acid": ("acetic acid", "ethanoic acid", "醋酸", "乙酸"),
+    "synthetic rubber": ("synthetic rubber", "sbr", "nbr", "butadiene rubber", "合成橡胶"),
+    "steel — all": ("steel", "steel coil", "hot rolled", "cold rolled", "galvanized", "rebar", "wire rod", "billet", "slab", "steel pipe", "stainless steel", "steel scrap", "structural steel"),
+    "hot-rolled coil": ("hot rolled coil", "hot-rolled coil", "hrc", "hot rolled steel", "热轧卷"),
+    "cold-rolled coil": ("cold rolled coil", "cold-rolled coil", "crc", "cold rolled steel", "冷轧卷"),
+    "galvanized steel": ("galvanized steel", "galvanised steel", "gi coil", "zinc coated steel", "镀锌钢"),
+    "pre-painted / color-coated steel": ("pre-painted steel", "prepainted steel", "color-coated steel", "colour coated steel", "ppgi", "ppgl"),
+    "rebar": ("rebar", "reinforcing bar", "reinforcement steel", "钢筋"),
+    "wire rod": ("wire rod", "steel wire rod", "盘条"),
+    "billets": ("steel billet", "billets", "billet steel", "钢坯"),
+    "slabs": ("steel slab", "slabs", "slab steel", "钢坯"),
+    "steel pipes and tubes": ("steel pipe", "steel pipes", "steel tube", "steel tubes", "seamless pipe", "welded pipe", "钢管"),
+    "stainless steel": ("stainless steel", "inox", "不锈钢"),
+    "steel scrap": ("steel scrap", "ferrous scrap", "scrap steel", "废钢"),
+    "structural steel": ("structural steel", "steel structure", "steel sections", "H-beam", "钢结构"),
+    "flat steel products": ("flat steel", "flat steel products", "steel sheet", "steel plate", "steel coil"),
+    "renewable energy — all": ("solar panel", "pv module", "solar cell", "solar inverter", "mounting structure", "wind turbine", "battery energy storage", "bess", "lithium-ion battery", "green hydrogen", "electrolyzer", "renewable energy equipment"),
+    "solar panels / pv modules": ("solar panel", "solar panels", "pv module", "photovoltaic module", "光伏组件"),
+    "solar cells": ("solar cell", "photovoltaic cell", "pv cell", "太阳能电池片"),
+    "solar inverters": ("solar inverter", "pv inverter", "photovoltaic inverter", "光伏逆变器"),
+    "solar mounting structures": ("solar mounting structure", "solar racking", "pv mounting", "solar tracker"),
+    "wind turbines": ("wind turbine", "wind power turbine", "风力发电机组"),
+    "wind-turbine components": ("wind turbine component", "wind blade", "wind tower", "nacelle", "wind gearbox"),
+    "battery energy storage systems (bess)": ("battery energy storage system", "bess", "energy storage system", "储能系统"),
+    "lithium-ion batteries": ("lithium-ion battery", "lithium ion battery", "li-ion battery", "lithium battery", "锂电池"),
+    "green hydrogen": ("green hydrogen", "renewable hydrogen", "electrolytic hydrogen", "绿氢"),
+    "electrolyzers": ("electrolyzer", "electrolyser", "water electrolysis", "电解槽"),
+    "renewable-energy project equipment": ("renewable energy equipment", "renewable project equipment", "solar equipment", "wind energy equipment"),
+}
+PRODUCT_FAMILY_TERMS = {
+    "petroleum": ("petroleum", "refinery", "crude oil", "fuel oil", "bitumen", "asphalt", "lubricant", "base oil", "gasoil", "petcoke", "paraffin"),
+    "chemical": ("chemical", "chemicals", "chemical manufacturer", "chemical supplier", "chemical plant"),
+    "petrochemical": ("petrochemical", "polymer", "resin", "ethylene", "propylene", "aromatics", "synthetic rubber"),
+    "steel": ("steel", "metal service center", "steel mill", "steel coil", "rebar", "billet"),
+    "renewable": ("renewable energy", "solar", "photovoltaic", "wind turbine", "battery storage", "green hydrogen", "electrolyzer"),
+}
+def build_product_terms(product):
+    normalized = re.sub(r"\s+", " ", val(product)).strip().lower()
+    terms = [normalized]
+    terms.extend(PRODUCT_SYNONYMS.get(normalized, ()))
+    if "petroleum products" in normalized:
+        terms.extend(PRODUCT_FAMILY_TERMS["petroleum"])
+    elif "chemicals" in normalized or normalized in ("industrial chemical", "specialty chemical"):
+        terms.extend(PRODUCT_FAMILY_TERMS["chemical"])
+    elif "petrochemicals" in normalized:
+        terms.extend(PRODUCT_FAMILY_TERMS["petrochemical"])
+    elif "steel" in normalized:
+        terms.extend(PRODUCT_FAMILY_TERMS["steel"])
+    elif "renewable" in normalized:
+        terms.extend(PRODUCT_FAMILY_TERMS["renewable"])
+    # Include meaningful words for custom products and labels with extra qualifiers.
+    terms.extend(token for token in re.findall(r"[a-zA-Z0-9\u4e00-\u9fff]+", normalized) if len(token) > 2)
+    return tuple(dict.fromkeys(term.strip().lower() for term in terms if term.strip()))
+PRODUCT_TERMS = build_product_terms(PRODUCT_NAME)
+INDUSTRY_TERMS = PRODUCT_TERMS
 COMPANY_TERMS = (
     "company", "group", "limited", "ltd", "manufacturer", "manufacturing",
     "factory", "supplier", "production", "importer", "exporter", "refinery",
@@ -378,10 +483,24 @@ def _scrapecreators_get(path, params):
         params=params,
         timeout=45,
     )
-    r.raise_for_status()
-    data = r.json()
+    if r.status_code >= 400:
+        detail = (r.text or "").replace("\\n", " ")[:240]
+        print(
+            f"SCRAPECREATORS_HTTP_ERROR endpoint={path}; status={r.status_code}; "
+            f"query={val(params.get('query'))[:100]}; body={detail!r}"
+        )
+        # Treat 404 as an endpoint/provider error, not proof that there are no matches.
+        r.raise_for_status()
+    try:
+        data = r.json()
+    except ValueError as exc:
+        raise RuntimeError(
+            f"ScrapeCreators returned non-JSON data for {path} (HTTP {r.status_code})"
+        ) from exc
     if isinstance(data, dict) and data.get("success") is False:
-        raise RuntimeError("ScrapeCreators native discovery returned success=false")
+        raise RuntimeError(
+            f"ScrapeCreators native discovery returned success=false for {path}"
+        )
     return data
 
 
@@ -804,7 +923,7 @@ def native_candidates(platform, query):
 
 
 def personal_profile_candidate_score(result, url):
-    """Score public LinkedIn people only when China, industry and role evidence exists."""
+    """Rank relevant public LinkedIn people without requiring every signal in one snippet."""
     if not urlparse(url).path.lower().startswith("/in/"):
         return 0
     text = " ".join([
@@ -812,21 +931,19 @@ def personal_profile_candidate_score(result, url):
         val(result.get("headline")), val(result.get("current_company")),
         val(result.get("location")), url
     ]).lower()
-    if not any(term in text for term in PRODUCT_TERMS):
+    product_hits = sum(1 for term in PRODUCT_TERMS if term and term in text)
+    if not product_hits:
         return 0
-    if not any(term in text for term in MARKET_SIGNALS):
-        return 0
-    # A role mentioned only in a post can describe somebody else. Require the
-    # buyer/decision-maker evidence in public author identity metadata instead.
     role_text = " ".join([
         val(result.get("title")), val(result.get("headline")),
         val(result.get("current_company"))
     ]).lower()
-    if not any(term in role_text for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS):
-        return 0
-    return 10 + sum(1 for term in MARKET_SIGNALS if term in text) + sum(
-        1 for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS if term in role_text
-    )
+    role_hits = sum(1 for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS if term in role_text)
+    market_hits = sum(1 for term in MARKET_SIGNALS if term in text)
+    # Provider search was already issued with the selected product and target market.
+    # Do not discard a public professional profile solely because the snippet omits
+    # the location or job-title vocabulary; use those signals to rank instead.
+    return 8 + product_hits * 4 + role_hits * 2 + market_hits
 
 
 def save_personal_profile(platform, url, public_name=""):
@@ -862,13 +979,15 @@ def social_candidate_score(platform, result, url):
     text = " ".join([title, snippet, url]).lower()
     if platform == "linkedin" and urlparse(url).path.lower().startswith("/in/"):
         return personal_profile_candidate_score(result, url)
-    lubricant_hits = sum(1 for term in PRODUCT_TERMS if term in text)
-    buyer_hits = sum(1 for term in BUYER_TYPE_TERMS if term in text)
-    market_hits = sum(1 for term in MARKET_SIGNALS if term in text)
-    # Require product, buyer-type and target-market evidence in the candidate itself.
-    if not lubricant_hits or not buyer_hits or not market_hits:
+    product_hits = sum(1 for term in PRODUCT_TERMS if term and term in text)
+    buyer_hits = sum(1 for term in BUYER_TYPE_TERMS if term and term in text)
+    market_hits = sum(1 for term in MARKET_SIGNALS if term and term in text)
+    # Product fit is the relevance anchor. Market and buyer signals improve ranking,
+    # but neither must appear in the short provider snippet because the native query
+    # itself already includes both the configured market and product/buyer vocabulary.
+    if not product_hits:
         return 0
-    return lubricant_hits * 5 + buyer_hits * 3 + market_hits * 2
+    return product_hits * 5 + buyer_hits * 2 + market_hits
 
 
 def pace_cloudflare_request():
@@ -2412,8 +2531,15 @@ def main():
                     ))
 
     print(
+        "GOOGLE_SHEETS_READ_OK "
+        f"leads_rows={len(rows)}; personal_profile_rows={len(profile_rows)}; "
+        f"leads_columns={len(rows[0]) if rows else len(fields)}; "
+        f"profiles_columns={len(profile_rows[0]) if profile_rows else len(PERSONAL_PROFILE_FIELDS)}"
+    )
+    print(
         f"EXISTING_STATE_LOADED company_social_keys={len(EXISTING_SOCIAL_KEYS)}; "
-        f"personal_profile_keys={len(EXISTING_PERSONAL_KEYS)}"
+        f"personal_profile_keys={len(EXISTING_PERSONAL_KEYS)}; "
+        f"dedupe_before_enrichment=true"
     )
 
     # Search only within the requested social networks using native provider APIs.
