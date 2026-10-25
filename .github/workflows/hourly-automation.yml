@@ -396,10 +396,8 @@ on:
         type: boolean
         default: false
 
-  # Workflow checks every three hours; product discovery is budget-paced to every third scheduled run.
-  # Composio is primary, Cloudflare Browser is a capped web/Google Maps fallback, and direct Firecrawl is last-resort.
-  schedule:
-    - cron: "0 */3 * * *"
+  # TEMPORARILY PAUSED: automatic schedule disabled while LinkedIn/Facebook collection is being fixed.
+  # Manual runs remain available through workflow_dispatch.
 
 permissions:
   contents: write
