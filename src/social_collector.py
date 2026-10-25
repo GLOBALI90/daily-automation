@@ -61,6 +61,7 @@ MAX_CLOUDFLARE_CALLS_PER_RUN = 2
 CLOUDFLARE_AUDIT = []
 PROFILE_AUDIT = []
 DISCOVERY_COUNTS = {}
+DISCOVERY_ERRORS = []
 CLOUDFLARE_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_AUDIT = []
@@ -646,11 +647,10 @@ def _linkedin_provider_candidates(query):
         params={"query": query},
         timeout=20,
     )
-    # ScrapeCreators currently uses HTTP 404 for some valid searches with no
-    # matching public posts. Treat that as an empty result, not a broken endpoint.
+    # A 404 may mean the route is unavailable, not that the search had zero matches.
+    # Treat it as a provider error so the LinkedIn-specific Apify fallback can run.
     if getattr(response, "status_code", None) == 404:
-        print("LinkedIn provider search: no public post matches (HTTP 404 interpreted as empty results)")
-        return []
+        raise RuntimeError("ScrapeCreators LinkedIn search endpoint returned HTTP 404; treating as provider error, not an empty search.")
     response.raise_for_status()
     payload = response.json()
     if isinstance(payload, dict) and payload.get("success") is False:
@@ -1314,6 +1314,12 @@ def discover(p):
             results = native_candidates(p, query)
         except Exception as exc:
             last_error = exc
+            DISCOVERY_ERRORS.append({
+                "platform": p,
+                "query": query,
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:500]
+            })
             print(
                 f"Native social discovery failed: platform={p}; "
                 f"method={DISCOVERY_METHODS[p]}; error={type(exc).__name__}: {exc}"
@@ -1942,6 +1948,7 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "generic_web_search_enabled": False,
         "google_maps_enabled": False,
         "provider_counts": provider_counts,
+        "discovery_errors": DISCOVERY_ERRORS,
         "cloudflare": {
             "token_used": False,
             "calls_used": 0,
@@ -2578,8 +2585,8 @@ def main():
         print("No new Facebook or LinkedIn candidates found after checking stored records")
         write_run_report(
             platforms_to_collect, 0, 0,
-            {"ScrapeCreators": 0, "Apify": 0, "failed": 0},
-            "no_new_candidates"
+            {"ScrapeCreators": 0, "Apify": 0, "failed": len(DISCOVERY_ERRORS)},
+            "provider_errors_no_candidates" if DISCOVERY_ERRORS else "no_new_candidates"
         )
         print(
             f"PERSONAL_PROFILE_SUMMARY discovered=0; new_account_only_records=0; "
