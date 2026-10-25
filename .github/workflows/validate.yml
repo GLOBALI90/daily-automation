@@ -1,9 +1,8 @@
 name: Validate Automation Code
 
+# TEMPORARILY MANUAL-ONLY while the social-only refactor is being reviewed.
+# This avoids automatically running regression tests on each code commit.
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
