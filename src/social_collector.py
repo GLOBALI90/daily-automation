@@ -61,6 +61,7 @@ MAX_CLOUDFLARE_CALLS_PER_RUN = 2
 CLOUDFLARE_AUDIT = []
 PROFILE_AUDIT = []
 DISCOVERY_COUNTS = {}
+DISCOVERY_ERRORS = []
 CLOUDFLARE_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_AUDIT = []
@@ -285,7 +286,7 @@ PRODUCT_SYNONYM_GROUPS = [
      INDUSTRY_TERMS + ("lubricant blender", "lubricant blending plant", "lubricant distributor", "润滑油", "润滑脂", "工业润滑油")),
 ]
 _product_name_lower = PRODUCT_NAME.lower()
-_product_tokens = [token for token in re.findall(r"[a-zA-Z0-9\\u4e00-\\u9fff]+", _product_name_lower) if len(token) > 2]
+_product_tokens = [token for token in re.findall(r"[a-zA-Z0-9\u4e00-\u9fff]+", _product_name_lower) if len(token) > 2]
 _selected_synonyms = []
 for _keys, _synonyms in PRODUCT_SYNONYM_GROUPS:
     if any(_key in _product_name_lower for _key in _keys):
@@ -405,12 +406,13 @@ DISCOVERY_METHODS = {
 def _scrapecreators_get(path, params):
     if not SCRAPECREATORS:
         raise RuntimeError("SCRAPECREATORS_API_KEY missing for native social discovery")
-    r = session.get(
-        "https://api.scrapecreators.com" + path,
-        headers={"x-api-key": SCRAPECREATORS, "Accept": "application/json"},
-        params=params,
-        timeout=45,
-    )
+    request_url = "https://api.scrapecreators.com" + path
+    request_headers = {"x-api-key": SCRAPECREATORS, "Accept": "application/json"}
+    r = session.get(request_url, headers=request_headers, params=params, timeout=45)
+    if getattr(r, "status_code", None) in (429, 500, 502, 503, 504):
+        print(f"SCRAPECREATORS_TRANSIENT_RETRY path={path}; status={r.status_code}; retry=1")
+        time.sleep(2)
+        r = session.get(request_url, headers=request_headers, params=params, timeout=45)
     r.raise_for_status()
     data = r.json()
     if isinstance(data, dict) and data.get("success") is False:
@@ -545,12 +547,14 @@ def _linkedin_provider_candidates(query):
     """
     if not SCRAPECREATORS:
         raise RuntimeError("SCRAPECREATORS_API_KEY missing for LinkedIn provider search")
-    response = session.get(
-        "https://api.scrapecreators.com/v1/linkedin/search/posts",
-        headers={"x-api-key": SCRAPECREATORS, "Accept": "application/json"},
-        params={"query": query},
-        timeout=20,
-    )
+    request_url = "https://api.scrapecreators.com/v1/linkedin/search/posts"
+    request_headers = {"x-api-key": SCRAPECREATORS, "Accept": "application/json"}
+    request_params = {"query": query}
+    response = session.get(request_url, headers=request_headers, params=request_params, timeout=20)
+    if getattr(response, "status_code", None) in (429, 500, 502, 503, 504):
+        print(f"SCRAPECREATORS_TRANSIENT_RETRY path=/v1/linkedin/search/posts; status={response.status_code}; retry=1")
+        time.sleep(2)
+        response = session.get(request_url, headers=request_headers, params=request_params, timeout=20)
     # ScrapeCreators currently uses HTTP 404 for some valid searches with no
     # matching public posts. Treat that as an empty result, not a broken endpoint.
     if getattr(response, "status_code", None) == 404:
@@ -1214,6 +1218,13 @@ def discover(p):
             results = native_candidates(p, query)
         except Exception as exc:
             last_error = exc
+            error_record = {
+                "platform": p,
+                "method": DISCOVERY_METHODS[p],
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:500],
+            }
+            DISCOVERY_ERRORS.append(error_record)
             print(
                 f"Native social discovery failed: platform={p}; "
                 f"method={DISCOVERY_METHODS[p]}; error={type(exc).__name__}: {exc}"
@@ -1834,8 +1845,11 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "discovered_candidates_total": discovered,
         "discovered_candidates_by_platform": DISCOVERY_COUNTS,
         "new_qualified_leads_added": added,
+        "existing_social_rows_read": SHEET_LEADS_ROWS_READ,
+        "existing_personal_profile_rows_read": SHEET_PERSONAL_ROWS_READ,
         "existing_social_records_checked": len(EXISTING_SOCIAL_KEYS),
         "existing_personal_profiles_checked": len(EXISTING_PERSONAL_KEYS),
+        "discovery_errors": DISCOVERY_ERRORS,
         "duplicates_skipped_before_enrichment": DUPLICATE_PREFILTER_SKIPPED,
         "cloudflare_primary_discovery": False,
         "collection_scope": "linkedin_facebook_only",
@@ -2397,6 +2411,8 @@ def main():
     # provider calls if its endpoint/token are not configured.
     store = GoogleSheetStore.from_env()
     rows = store.read_table("Leads")
+    global SHEET_LEADS_ROWS_READ, SHEET_PERSONAL_ROWS_READ
+    SHEET_LEADS_ROWS_READ = len(rows)
     fields = list(FIELDS)
     for stored in rows:
         for field in stored.keys():
@@ -2411,6 +2427,7 @@ def main():
         writer.writerows(rows)
 
     profile_rows = store.read_table("Personal Profiles")
+    SHEET_PERSONAL_ROWS_READ = len(profile_rows)
     with PERSONAL_PROFILES.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=PERSONAL_PROFILE_FIELDS, extrasaction="ignore")
         writer.writeheader()
@@ -2440,7 +2457,9 @@ def main():
                     ))
 
     print(
-        f"EXISTING_STATE_LOADED company_social_keys={len(EXISTING_SOCIAL_KEYS)}; "
+        f"EXISTING_STATE_LOADED leads_rows_read={SHEET_LEADS_ROWS_READ}; "
+        f"personal_profile_rows_read={SHEET_PERSONAL_ROWS_READ}; "
+        f"company_social_keys={len(EXISTING_SOCIAL_KEYS)}; "
         f"personal_profile_keys={len(EXISTING_PERSONAL_KEYS)}"
     )
 
@@ -2471,8 +2490,8 @@ def main():
         print("No new Facebook or LinkedIn candidates found after checking stored records")
         write_run_report(
             platforms_to_collect, 0, 0,
-            {"ScrapeCreators": 0, "Apify": 0, "failed": 0},
-            "no_new_candidates"
+            {"ScrapeCreators": 0, "Apify": 0, "failed": len(DISCOVERY_ERRORS)},
+            "provider_errors" if DISCOVERY_ERRORS else "no_new_candidates"
         )
         print(
             f"PERSONAL_PROFILE_SUMMARY discovered=0; new_account_only_records=0; "
@@ -2603,14 +2622,11 @@ def main():
         }, ensure_ascii=False))
 
         relevant = relevant_social_profile(p, surl or url, company, web, loc, bio)
-        strict_relevance = os.getenv("SOCIAL_STRICT_RELEVANCE", "false").strip().lower() in ("1", "true", "yes", "on")
-        if not relevant and strict_relevance:
-            profile_audit_row["outcome"] = "rejected_not_relevant"
-            print(f"Rejected low-confidence social result: platform={p}; discovered_url={url}; returned_profile_url={returned_url or 'NOT_RETURNED'}")
-            continue
+        # Observation-first collection: relevance is recorded for later review,
+        # but weak/incomplete public profile metadata never blocks a candidate.
         profile_audit_row["outcome"] = "accepted_relevant" if relevant else "retained_observation_mode"
         if not relevant:
-            print(f"SOCIAL_RELEVANCE_OBSERVATION platform={p}; strict_filter=disabled; candidate_retained_for_observation; url={url}")
+            print(f"SOCIAL_RELEVANCE_OBSERVATION platform={p}; strict_filter=removed; candidate_retained_for_observation; url={url}")
 
         if (p, surl.rstrip("/")) in seen:
             continue
