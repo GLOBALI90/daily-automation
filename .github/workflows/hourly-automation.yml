@@ -385,7 +385,7 @@ on:
           - "5"
         default: "3"
       outreach_enabled:
-        description: "Social mode only: enable email/WhatsApp delivery. Product-web mode sends automatically only to AI-cleared, high-confidence buyers with a public email verified on the official site."
+        description: "Optional: enable email/WhatsApp delivery for social leads. Disabled by default; collection never sends outreach unless explicitly enabled."
         required: false
         type: boolean
         default: false
@@ -443,14 +443,14 @@ jobs:
         run: python src/social_collector.py
 
       - name: Automatic qualified product outreach or opt-in social outreach
-        if: ${{ !inputs.validation_only && ((inputs.collection_mode || 'product_web') == 'product_web' || inputs.outreach_enabled) }}
+        if: ${{ !inputs.validation_only && inputs.collection_mode == 'social' && inputs.outreach_enabled }}
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.6-flash' }}
-          OUTREACH_SOURCE: ${{ inputs.collection_mode || 'product_web' }}
-          SEND_EMAILS: ${{ (inputs.collection_mode || 'product_web') == 'product_web' && 'true' || (inputs.outreach_enabled && 'true' || 'false') }}
+          OUTREACH_SOURCE: social
+          SEND_EMAILS: ${{ inputs.collection_mode == 'social' && inputs.outreach_enabled && 'true' || 'false' }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          WHATSAPP_ENABLED: ${{ (inputs.collection_mode || 'product_web') == 'product_web' && 'true' || (inputs.outreach_enabled && 'true' || 'false') }}
+          WHATSAPP_ENABLED: ${{ inputs.collection_mode == 'social' && inputs.outreach_enabled && 'true' || 'false' }}
           WUAPI_API_KEY: ${{ secrets.WUAPI_API_KEY }}
           WUAPI_ACCOUNT_ID: j57bvn1pvvfe2kg6zadtxxh3618gayex
         run: python src/process_leads.py
