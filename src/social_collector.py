@@ -455,16 +455,25 @@ def relevant_social_profile(platform, url, company, website, location, bio):
     return product_match and buyer_match
 
 
+# Search variants are product-specific synonyms, not just the display label.
+# Keep three distinct targeted queries per platform to improve coverage for product aliases.
+_PRODUCT_QUERY_TERMS = list(dict.fromkeys(
+    [PRODUCT_NAME] + list(PRODUCT_SYNONYMS.get(
+        re.sub(r"\\s+", " ", PRODUCT_NAME).strip().lower(), ()
+    ))[:3]
+))
+while len(_PRODUCT_QUERY_TERMS) < 3:
+    _PRODUCT_QUERY_TERMS.append(PRODUCT_NAME)
 NATIVE_QUERIES = {
     "linkedin": [
-        f'{TARGET_MARKET} "{PRODUCT_NAME}" {BUYER_TYPES} company',
-        f'{TARGET_MARKET} "{PRODUCT_NAME}" procurement purchasing sourcing',
-        f'{TARGET_MARKET} "{PRODUCT_NAME}" supplier importer distributor',
+        f'{TARGET_MARKET} "{_PRODUCT_QUERY_TERMS[0]}" {BUYER_TYPES} company',
+        f'{TARGET_MARKET} "{_PRODUCT_QUERY_TERMS[1]}" procurement purchasing sourcing',
+        f'{TARGET_MARKET} "{_PRODUCT_QUERY_TERMS[2]}" supplier importer distributor',
     ],
     "facebook": [
-        f'{TARGET_MARKET} "{PRODUCT_NAME}" {BUYER_TYPES}',
-        f'{TARGET_MARKET} "{PRODUCT_NAME}" company website contact',
-        f'{TARGET_MARKET} "{PRODUCT_NAME}" supplier importer distributor',
+        f'{TARGET_MARKET} "{_PRODUCT_QUERY_TERMS[0]}" {BUYER_TYPES}',
+        f'{TARGET_MARKET} "{_PRODUCT_QUERY_TERMS[1]}" company website contact',
+        f'{TARGET_MARKET} "{_PRODUCT_QUERY_TERMS[2]}" supplier importer distributor',
     ],
 }
 
