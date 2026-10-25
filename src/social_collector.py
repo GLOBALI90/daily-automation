@@ -1497,6 +1497,11 @@ def provider_chain(p, url):
     elif p == "facebook" and CLOUDFLARE_TOKEN and CLOUDFLARE_CALLS_THIS_RUN < MAX_CLOUDFLARE_CALLS_PER_RUN:
         providers.append(("CloudflareDeepBackup", lambda: cloudflare_profile(p, url)))
 
+    # ScrapeCreators has platform-native profile endpoints for both networks.
+    # Keep it as a bounded fallback after the capped Cloudflare Worker, and before
+    # the LinkedIn-only Apify fallback, so Facebook does not become a dead end.
+    if SCRAPECREATORS:
+        providers.append(("ScrapeCreators", lambda: scrapecreators_profile(p, url)))
     if p == "linkedin" and APIFY:
         providers.append(("Apify", lambda: apify_profile(p, url)))
     if not providers:
@@ -1543,7 +1548,7 @@ def provider_chain(p, url):
                 relevant = relevant_social_profile(
                     p, normalized[9] or url, company, web, loc, bio
                 )
-                strict_relevance = os.getenv("SOCIAL_STRICT_RELEVANCE", "false").strip().lower() in ("1", "true", "yes", "on")
+                strict_relevance = os.getenv("SOCIAL_STRICT_RELEVANCE", "true").strip().lower() in ("1", "true", "yes", "on")
                 if not relevant and strict_relevance:
                     errors.append(f"{name}:profile_not_relevant_to_target")
                     print(
@@ -1920,6 +1925,8 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "started_at_utc": RUN_STARTED_AT,
         "finished_at_utc": datetime.now(timezone.utc).isoformat(),
         "outcome": outcome,
+        "collection_mode": COLLECTION_MODE,
+        "strict_relevance_enabled": os.getenv("SOCIAL_STRICT_RELEVANCE", "true").strip().lower() in ("1", "true", "yes", "on"),
         "platforms": platforms,
         "max_valid_leads_per_run": MAX_ITEMS,
         "minimum_seconds_between_profile_enrichment_requests": REQUEST_INTERVAL_SECONDS,
@@ -2716,7 +2723,7 @@ def main():
         }, ensure_ascii=False))
 
         relevant = relevant_social_profile(p, surl or url, company, web, loc, bio)
-        strict_relevance = os.getenv("SOCIAL_STRICT_RELEVANCE", "false").strip().lower() in ("1", "true", "yes", "on")
+        strict_relevance = os.getenv("SOCIAL_STRICT_RELEVANCE", "true").strip().lower() in ("1", "true", "yes", "on")
         if not relevant and strict_relevance:
             profile_audit_row["outcome"] = "rejected_not_relevant"
             print(f"Rejected low-confidence social result: platform={p}; discovered_url={url}; returned_profile_url={returned_url or 'NOT_RETURNED'}")

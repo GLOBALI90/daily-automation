@@ -356,6 +356,25 @@ class ProviderChainTests(unittest.TestCase):
             },
         )
 
+    def test_facebook_uses_scrapecreators_when_worker_is_unavailable(self):
+        page_url = "https://www.facebook.com/examplefactory"
+        profile_data = {"name": "Example Factory", "description": "China industrial lubricant manufacturer"}
+
+        with (
+            patch.object(social, "SCRAPECREATORS", "test-api-key"),
+            patch.object(social, "CLOUDFLARE_TOKEN", ""),
+            patch.object(social, "normalize_provider", return_value=(
+                "Example Factory", "https://example.cn", "China", "Example Factory", "", "",
+                "China industrial lubricant manufacturer", "20", "", page_url,
+            )),
+            patch.object(social, "scrapecreators_profile", return_value=profile_data) as scrape,
+        ):
+            provider, data, errors = social.provider_chain("facebook", page_url)
+
+        self.assertEqual(provider, "ScrapeCreators")
+        self.assertEqual(data, profile_data)
+        scrape.assert_called_once_with("facebook", page_url)
+
     def test_empty_responses_do_not_count_as_success(self):
         with (
             patch.object(social, "cloudflare_profile", return_value={}),
