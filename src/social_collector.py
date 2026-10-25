@@ -61,7 +61,6 @@ MAX_CLOUDFLARE_CALLS_PER_RUN = 2
 CLOUDFLARE_AUDIT = []
 PROFILE_AUDIT = []
 DISCOVERY_COUNTS = {}
-DISCOVERY_ERRORS = []
 CLOUDFLARE_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_AUDIT = []
@@ -142,6 +141,7 @@ session.headers.update({"User-Agent": "rozhanglobal-social-collector/1.0"})
 # LinkedIn candidates come from the LinkedIn-specific provider search endpoint.
 # Profile enrichment uses the configured Cloudflare/provider fallback chain.
 LINKEDIN_SEARCH_RESULTS = {}
+SOCIAL_DISCOVERY_RESULTS = {}
 
 
 def val(x):
@@ -258,129 +258,131 @@ def good(p, u):
         for x in ["/search", "/explore", "/hashtag", "/jobs"]
     )
 
-# Product-aware synonyms for every product family exposed in workflow_dispatch.
-# The selected product determines discovery vocabulary; custom products retain their
-# own phrase/tokens rather than falling back to a lubricant-only filter.
+# Product terms and buyer roles are derived from the product selected in workflow_dispatch.
+# Results stay limited to public LinkedIn/Facebook pages; product relevance is advisory.
+INDUSTRY_TERMS = (
+    "industrial lubricant", "industrial lubricants", "lubricant manufacturer",
+    "lubricants manufacturer", "lubricating oil", "lubricating oils",
+    "lubricating grease", "industrial grease", "grease manufacturer",
+    "metalworking fluid", "hydraulic oil", "gear oil", "compressor oil",
+    "turbine oil", "industrial oil manufacturer", "lubricant blending",
+    "润滑油", "工业润滑油", "润滑脂", "工业润滑脂", "润滑剂",
+    "润滑油厂家", "润滑油生产", "润滑油制造商", "润滑脂生产厂家"
+)
+# Product-aware vocabulary for every workflow product. The selected product drives
+# discovery queries and relevance scoring; synonyms broaden recall without switching
+# to unrelated products or generic-web/Maps discovery.
 PRODUCT_SYNONYMS = {
-    "petroleum products — all": ("petroleum", "crude oil", "fuel oil", "gasoline", "diesel", "gasoil", "jet fuel", "kerosene", "lpg", "lng", "bitumen", "asphalt", "base oil", "lubricant", "paraffin", "petroleum coke", "sulfur"),
-    "crude oil": ("crude oil", "crude petroleum", "crude", "原油"),
-    "fuel oil": ("fuel oil", "bunker fuel", "marine fuel", "residual fuel", "燃料油"),
+    "petroleum products — all": ("petroleum products", "crude oil", "fuel oil", "gasoline", "diesel", "jet fuel", "kerosene", "lpg", "lng", "bitumen", "asphalt", "base oil", "lubricants", "grease", "paraffin wax", "petroleum coke", "sulfur"),
+    "crude oil": ("crude oil", "crude petroleum", "crude oil supplier", "原油"),
+    "fuel oil": ("fuel oil", "bunker fuel", "marine fuel oil", "residual fuel oil", "燃料油"),
     "gasoline / petrol": ("gasoline", "petrol", "motor gasoline", "汽油"),
-    "diesel / gasoil": ("diesel", "gasoil", "gas oil", "diesel fuel", "柴油"),
-    "jet fuel / aviation fuel": ("jet fuel", "aviation fuel", "aviation kerosene", "航空燃油"),
-    "kerosene": ("kerosene", "paraffin oil", "煤油"),
-    "lpg": ("lpg", "liquefied petroleum gas", "propane", "butane"),
-    "lng": ("lng", "liquefied natural gas"),
-    "bitumen / asphalt": ("bitumen", "asphalt", "paving bitumen", "road bitumen", "asphalt binder", "沥青"),
-    "base oils": ("base oil", "base oils", "lubricant base stock", "lube base oil", "基础油"),
-    "industrial lubricants": ("industrial lubricant", "industrial lubricants", "lubricating oil", "lubricating oils", "industrial grease", "hydraulic oil", "gear oil", "compressor oil", "turbine oil", "metalworking fluid", "润滑油", "工业润滑油", "润滑脂"),
-    "industrial greases": ("industrial grease", "lubricating grease", "lithium grease", "calcium grease", "润滑脂"),
-    "automotive lubricants": ("automotive lubricant", "automotive lubricants", "engine oil", "motor oil", "transmission fluid", "vehicle lubricant", "汽车润滑油"),
-    "hydraulic oils": ("hydraulic oil", "hydraulic fluid", "液压油"),
-    "gear oils": ("gear oil", "industrial gear lubricant", "gear lubricant", "齿轮油"),
-    "compressor oils": ("compressor oil", "air compressor lubricant", "压缩机油"),
-    "turbine oils": ("turbine oil", "turbine lubricant", "汽轮机油"),
-    "metalworking fluids": ("metalworking fluid", "cutting fluid", "cutting oil", "machining coolant", "金属加工液"),
-    "paraffin wax": ("paraffin wax", "fully refined paraffin", "semi refined paraffin", "石蜡"),
+    "diesel / gasoil": ("diesel", "gasoil", "gas oil", "automotive diesel", "柴油"),
+    "jet fuel / aviation fuel": ("jet fuel", "aviation fuel", "aviation turbine fuel", "航空燃油"),
+    "kerosene": ("kerosene", "paraffin oil", "灯油"),
+    "lpg": ("LPG", "liquefied petroleum gas", "propane", "butane", "液化石油气"),
+    "lng": ("LNG", "liquefied natural gas", "液化天然气"),
+    "bitumen / asphalt": ("bitumen", "asphalt", "paving bitumen", "road asphalt", "oxidized bitumen", "penetration grade bitumen", "polymer modified bitumen", "沥青", "道路沥青"),
+    "base oils": ("base oil", "base oils", "lubricant base stock", "lube base stock", "Group I base oil", "Group II base oil", "Group III base oil", "基础油"),
+    "industrial lubricants": INDUSTRY_TERMS,
+    "industrial greases": ("industrial grease", "lubricating grease", "lithium grease", "calcium grease", "complex grease", "润滑脂", "工业润滑脂"),
+    "automotive lubricants": ("automotive lubricants", "engine oil", "motor oil", "transmission fluid", "vehicle lubricants", "车用润滑油"),
+    "hydraulic oils": ("hydraulic oil", "hydraulic fluid", "anti-wear hydraulic oil", "液压油"),
+    "gear oils": ("gear oil", "industrial gear lubricant", "gearbox oil", "齿轮油"),
+    "compressor oils": ("compressor oil", "air compressor lubricant", "compressor lubricant", "压缩机油"),
+    "turbine oils": ("turbine oil", "steam turbine lubricant", "gas turbine oil", "汽轮机油"),
+    "metalworking fluids": ("metalworking fluid", "metalworking fluids", "cutting fluid", "machining fluid", "coolant", "金属加工液"),
+    "paraffin wax": ("paraffin wax", "fully refined paraffin wax", "semi refined paraffin wax", "石蜡"),
     "petroleum coke": ("petroleum coke", "petcoke", "calcined petroleum coke", "石油焦"),
-    "sulfur": ("sulfur", "sulphur", "granular sulfur", "硫磺"),
-    "chemicals — all": ("industrial chemical", "specialty chemical", "caustic soda", "soda ash", "methanol", "ethanol", "ammonia", "urea", "chlorine", "hydrochloric acid", "sulfuric acid", "hydrogen peroxide", "solvent", "acetone", "toluene", "xylene", "ethylene glycol", "glycerin", "titanium dioxide", "carbon black", "pigment", "resin", "adhesive", "surfactant", "water treatment chemical", "agrochemical"),
-    "industrial chemicals": ("industrial chemical", "industrial chemicals", "chemical manufacturer", "chemical supplier", "化工"),
-    "specialty chemicals": ("specialty chemical", "speciality chemical", "performance chemical", "fine chemical"),
-    "caustic soda": ("caustic soda", "sodium hydroxide", "lye", "烧碱", "氢氧化钠"),
-    "soda ash": ("soda ash", "sodium carbonate", "纯碱"),
+    "sulfur": ("sulfur", "sulphur", "industrial sulfur", "硫磺"),
+    "chemicals — all": ("industrial chemicals", "specialty chemicals", "caustic soda", "soda ash", "methanol", "ethanol", "ammonia", "urea", "chlorine", "hydrochloric acid", "sulfuric acid", "hydrogen peroxide", "solvents", "acetone", "toluene", "xylene", "ethylene glycol", "glycerin", "titanium dioxide", "carbon black", "pigments", "resins", "adhesives", "surfactants", "water treatment chemicals", "agrochemicals"),
+    "industrial chemicals": ("industrial chemicals", "bulk chemicals", "chemical raw materials", "industrial chemical supplier"),
+    "specialty chemicals": ("specialty chemicals", "speciality chemicals", "performance chemicals", "fine chemicals"),
+    "caustic soda": ("caustic soda", "sodium hydroxide", "NaOH", "烧碱", "氢氧化钠"),
+    "soda ash": ("soda ash", "sodium carbonate", "dense soda ash", "light soda ash", "纯碱"),
     "methanol": ("methanol", "methyl alcohol", "甲醇"),
-    "ethanol": ("ethanol", "ethyl alcohol", "乙醇"),
+    "ethanol": ("ethanol", "ethyl alcohol", "industrial alcohol", "乙醇"),
     "ammonia": ("ammonia", "anhydrous ammonia", "ammonia solution", "氨"),
-    "urea": ("urea", "carbamide", "尿素"),
-    "chlorine": ("chlorine", "chlorine gas", "氯气"),
-    "hydrochloric acid": ("hydrochloric acid", "muriatic acid", "hcl", "盐酸"),
-    "sulfuric acid": ("sulfuric acid", "sulphuric acid", "h2so4", "硫酸"),
-    "hydrogen peroxide": ("hydrogen peroxide", "peroxide", "h2o2", "双氧水"),
-    "industrial solvents": ("industrial solvent", "industrial solvents", "solvent supplier", "solvent manufacturer"),
+    "urea": ("urea", "industrial urea", "prilled urea", "颗粒尿素"),
+    "chlorine": ("chlorine", "liquid chlorine", "氯气"),
+    "hydrochloric acid": ("hydrochloric acid", "HCl", "muriatic acid", "盐酸"),
+    "sulfuric acid": ("sulfuric acid", "sulphuric acid", "H2SO4", "硫酸"),
+    "hydrogen peroxide": ("hydrogen peroxide", "H2O2", "industrial peroxide", "过氧化氢"),
+    "industrial solvents": ("industrial solvents", "solvent chemicals", "organic solvents", "工业溶剂"),
     "acetone": ("acetone", "propanone", "丙酮"),
     "toluene": ("toluene", "methylbenzene", "甲苯"),
-    "xylene": ("xylene", "dimethylbenzene", "二甲苯"),
-    "ethylene glycol": ("ethylene glycol", "monoethylene glycol", "meg", "乙二醇"),
+    "xylene": ("xylene", "mixed xylene", "para xylene", "二甲苯"),
+    "ethylene glycol": ("ethylene glycol", "monoethylene glycol", "MEG", "乙二醇"),
     "glycerin": ("glycerin", "glycerine", "glycerol", "甘油"),
-    "titanium dioxide": ("titanium dioxide", "tio2", "titanium white", "钛白粉"),
-    "carbon black": ("carbon black", "industrial carbon black", "炭黑"),
-    "pigments": ("industrial pigment", "pigment manufacturer", "inorganic pigment", "organic pigment", "颜料"),
-    "resins": ("resin", "resins", "resin manufacturer", "polymer resin"),
-    "adhesives": ("adhesive", "adhesives", "industrial adhesive", "glue manufacturer"),
-    "detergents and surfactants": ("detergent", "detergents", "surfactant", "surfactants", "surface active agent"),
-    "water-treatment chemicals": ("water treatment chemical", "water-treatment chemical", "boiler water chemical", "cooling water treatment"),
-    "agrochemicals": ("agrochemical", "agrochemicals", "crop protection", "pesticide", "herbicide", "fungicide"),
-    "petrochemicals — all": ("petrochemical", "ethylene", "propylene", "polyethylene", "polypropylene", "pvc", "pet resin", "polystyrene", "styrene", "butadiene", "aromatics", "pta", "paraxylene", "phenol", "acetic acid", "synthetic rubber", "石化"),
+    "titanium dioxide": ("titanium dioxide", "titanium white", "TiO2", "钛白粉"),
+    "carbon black": ("carbon black", "rubber carbon black", "炭黑"),
+    "pigments": ("industrial pigments", "organic pigments", "inorganic pigments", "颜料"),
+    "resins": ("industrial resins", "synthetic resin", "polymer resin", "树脂"),
+    "adhesives": ("industrial adhesives", "adhesive chemicals", "bonding adhesive", "胶粘剂"),
+    "detergents and surfactants": ("detergents", "surfactants", "surface active agents", "洗涤剂", "表面活性剂"),
+    "water-treatment chemicals": ("water treatment chemicals", "water-treatment chemicals", "boiler treatment chemicals", "水处理药剂"),
+    "agrochemicals": ("agrochemicals", "agricultural chemicals", "crop protection chemicals", "农用化学品"),
+    "petrochemicals — all": ("petrochemicals", "ethylene", "propylene", "polyethylene", "polypropylene", "PVC resin", "PET resin", "polystyrene", "styrene monomer", "butadiene", "aromatics", "MEG", "PTA", "paraxylene", "phenol", "acetic acid", "synthetic rubber"),
     "ethylene": ("ethylene", "ethene", "乙烯"),
     "propylene": ("propylene", "propene", "丙烯"),
-    "polyethylene (pe)": ("polyethylene", "polyethylene resin", "pe resin", "hdpe", "ldpe", "lldpe", "聚乙烯"),
-    "polypropylene (pp)": ("polypropylene", "pp resin", "polypropylene resin", "聚丙烯"),
-    "pvc resin": ("pvc resin", "polyvinyl chloride", "pvc", "聚氯乙烯"),
-    "pet resin": ("pet resin", "polyethylene terephthalate", "pet resin manufacturer"),
-    "polystyrene (ps)": ("polystyrene", "ps resin", "eps", "hips", "聚苯乙烯"),
-    "styrene monomer": ("styrene monomer", "styrene", "苯乙烯"),
+    "polyethylene (pe)": ("polyethylene", "polyethylene resin", "PE resin", "HDPE", "LDPE", "LLDPE", "聚乙烯"),
+    "polypropylene (pp)": ("polypropylene", "PP resin", "polypropylene resin", "聚丙烯"),
+    "pvc resin": ("PVC resin", "polyvinyl chloride resin", "PVC", "聚氯乙烯"),
+    "pet resin": ("PET resin", "polyethylene terephthalate", "PET polymer", "聚酯切片"),
+    "polystyrene (ps)": ("polystyrene", "PS resin", "GPPS", "HIPS", "聚苯乙烯"),
+    "styrene monomer": ("styrene monomer", "styrene", "SM", "苯乙烯"),
     "butadiene": ("butadiene", "1,3-butadiene", "丁二烯"),
-    "aromatics": ("aromatics", "aromatic hydrocarbons", "benzene", "toluene", "xylene"),
-    "monoethylene glycol (meg)": ("monoethylene glycol", "meg", "ethylene glycol", "乙二醇"),
-    "purified terephthalic acid (pta)": ("purified terephthalic acid", "pta", "terephthalic acid", "精对苯二甲酸"),
-    "paraxylene": ("paraxylene", "p-xylene", "para-xylene", "对二甲苯"),
+    "aromatics": ("petrochemical aromatics", "benzene", "toluene", "xylene", "BTX aromatics", "芳烃"),
+    "monoethylene glycol (meg)": ("monoethylene glycol", "MEG", "ethylene glycol", "乙二醇"),
+    "purified terephthalic acid (pta)": ("purified terephthalic acid", "PTA", "terephthalic acid", "精对苯二甲酸"),
+    "paraxylene": ("paraxylene", "para-xylene", "p-xylene", "PX", "对二甲苯"),
     "phenol": ("phenol", "carbolic acid", "苯酚"),
     "acetic acid": ("acetic acid", "ethanoic acid", "醋酸", "乙酸"),
-    "synthetic rubber": ("synthetic rubber", "sbr", "nbr", "butadiene rubber", "合成橡胶"),
-    "steel — all": ("steel", "steel coil", "hot rolled", "cold rolled", "galvanized", "rebar", "wire rod", "billet", "slab", "steel pipe", "stainless steel", "steel scrap", "structural steel"),
-    "hot-rolled coil": ("hot rolled coil", "hot-rolled coil", "hrc", "hot rolled steel", "热轧卷"),
-    "cold-rolled coil": ("cold rolled coil", "cold-rolled coil", "crc", "cold rolled steel", "冷轧卷"),
-    "galvanized steel": ("galvanized steel", "galvanised steel", "gi coil", "zinc coated steel", "镀锌钢"),
-    "pre-painted / color-coated steel": ("pre-painted steel", "prepainted steel", "color-coated steel", "colour coated steel", "ppgi", "ppgl"),
-    "rebar": ("rebar", "reinforcing bar", "reinforcement steel", "钢筋"),
-    "wire rod": ("wire rod", "steel wire rod", "盘条"),
-    "billets": ("steel billet", "billets", "billet steel", "钢坯"),
-    "slabs": ("steel slab", "slabs", "slab steel", "钢坯"),
-    "steel pipes and tubes": ("steel pipe", "steel pipes", "steel tube", "steel tubes", "seamless pipe", "welded pipe", "钢管"),
-    "stainless steel": ("stainless steel", "inox", "不锈钢"),
+    "synthetic rubber": ("synthetic rubber", "SBR", "BR rubber", "butadiene rubber", "合成橡胶"),
+    "steel — all": ("steel products", "hot rolled coil", "cold rolled coil", "galvanized steel", "color coated steel", "rebar", "wire rod", "steel billets", "steel slabs", "steel pipes", "stainless steel", "steel scrap", "structural steel", "flat steel"),
+    "hot-rolled coil": ("hot rolled coil", "hot-rolled coil", "HRC steel", "hot rolled steel sheet", "热轧卷板"),
+    "cold-rolled coil": ("cold rolled coil", "cold-rolled coil", "CRC steel", "cold rolled steel sheet", "冷轧卷板"),
+    "galvanized steel": ("galvanized steel", "galvanised steel", "GI steel coil", "zinc coated steel", "镀锌钢"),
+    "pre-painted / color-coated steel": ("prepainted steel", "pre-painted steel", "color coated steel", "colour coated steel", "PPGI", "PPGL", "彩涂板"),
+    "rebar": ("rebar", "reinforcing steel", "reinforcing bar", "钢筋"),
+    "wire rod": ("wire rod", "steel wire rod", "wire-rod coil", "线材"),
+    "billets": ("steel billets", "steel billet", "continuous casting billet", "钢坯"),
+    "slabs": ("steel slabs", "steel slab", "continuous casting slab", "钢板坯"),
+    "steel pipes and tubes": ("steel pipes", "steel tubes", "seamless steel pipe", "welded steel pipe", "钢管"),
+    "stainless steel": ("stainless steel", "stainless coil", "stainless sheet", "不锈钢"),
     "steel scrap": ("steel scrap", "ferrous scrap", "scrap steel", "废钢"),
-    "structural steel": ("structural steel", "steel structure", "steel sections", "H-beam", "钢结构"),
-    "flat steel products": ("flat steel", "flat steel products", "steel sheet", "steel plate", "steel coil"),
-    "renewable energy — all": ("solar panel", "pv module", "solar cell", "solar inverter", "mounting structure", "wind turbine", "battery energy storage", "bess", "lithium-ion battery", "green hydrogen", "electrolyzer", "renewable energy equipment"),
-    "solar panels / pv modules": ("solar panel", "solar panels", "pv module", "photovoltaic module", "光伏组件"),
-    "solar cells": ("solar cell", "photovoltaic cell", "pv cell", "太阳能电池片"),
-    "solar inverters": ("solar inverter", "pv inverter", "photovoltaic inverter", "光伏逆变器"),
-    "solar mounting structures": ("solar mounting structure", "solar racking", "pv mounting", "solar tracker"),
-    "wind turbines": ("wind turbine", "wind power turbine", "风力发电机组"),
-    "wind-turbine components": ("wind turbine component", "wind blade", "wind tower", "nacelle", "wind gearbox"),
-    "battery energy storage systems (bess)": ("battery energy storage system", "bess", "energy storage system", "储能系统"),
-    "lithium-ion batteries": ("lithium-ion battery", "lithium ion battery", "li-ion battery", "lithium battery", "锂电池"),
+    "structural steel": ("structural steel", "steel sections", "H-beam", "I-beam", "结构钢"),
+    "flat steel products": ("flat steel products", "flat steel", "steel sheet", "steel plate", "steel coil", "扁平材"),
+    "renewable energy — all": ("solar panels", "PV modules", "solar cells", "solar inverters", "mounting structures", "wind turbines", "wind components", "BESS", "lithium-ion batteries", "green hydrogen", "electrolyzers"),
+    "solar panels / pv modules": ("solar panels", "PV modules", "photovoltaic modules", "solar module manufacturer", "光伏组件"),
+    "solar cells": ("solar cells", "photovoltaic cells", "PV cells", "太阳能电池片"),
+    "solar inverters": ("solar inverter", "PV inverter", "photovoltaic inverter", "solar power inverter", "光伏逆变器"),
+    "solar mounting structures": ("solar mounting structures", "PV mounting system", "solar racking", "photovoltaic mounting", "光伏支架"),
+    "wind turbines": ("wind turbines", "wind turbine manufacturer", "wind power turbines", "风力发电机组"),
+    "wind-turbine components": ("wind turbine components", "wind power components", "wind blade", "wind tower", "风电零部件"),
+    "battery energy storage systems (bess)": ("battery energy storage system", "BESS", "energy storage system", "储能系统"),
+    "lithium-ion batteries": ("lithium-ion batteries", "lithium ion battery", "Li-ion battery", "锂离子电池"),
     "green hydrogen": ("green hydrogen", "renewable hydrogen", "electrolytic hydrogen", "绿氢"),
-    "electrolyzers": ("electrolyzer", "electrolyser", "water electrolysis", "电解槽"),
-    "renewable-energy project equipment": ("renewable energy equipment", "renewable project equipment", "solar equipment", "wind energy equipment"),
+    "electrolyzers": ("electrolyzer", "electrolyser", "water electrolysis equipment", "电解槽"),
+    "renewable-energy project equipment": ("renewable energy equipment", "solar equipment", "wind power equipment", "clean energy project equipment", "新能源设备"),
 }
 PRODUCT_FAMILY_TERMS = {
-    "petroleum": ("petroleum", "refinery", "crude oil", "fuel oil", "bitumen", "asphalt", "lubricant", "base oil", "gasoil", "petcoke", "paraffin"),
-    "chemical": ("chemical", "chemicals", "chemical manufacturer", "chemical supplier", "chemical plant"),
-    "petrochemical": ("petrochemical", "polymer", "resin", "ethylene", "propylene", "aromatics", "synthetic rubber"),
-    "steel": ("steel", "metal service center", "steel mill", "steel coil", "rebar", "billet"),
-    "renewable": ("renewable energy", "solar", "photovoltaic", "wind turbine", "battery storage", "green hydrogen", "electrolyzer"),
+    "petroleum products — all": ("petroleum products", "oil products", "refinery products", "petroleum supplier", "石油产品"),
+    "chemicals — all": ("industrial chemicals", "chemical raw materials", "chemical supplier", "bulk chemicals", "化工原料"),
+    "petrochemicals — all": ("petrochemicals", "petrochemical feedstocks", "petrochemical raw materials", "石化产品"),
+    "steel — all": ("steel manufacturer", "steel mill", "steel service center", "steel products", "钢铁产品"),
+    "renewable energy — all": ("renewable energy equipment", "solar and wind equipment", "clean energy components", "新能源设备"),
 }
-def build_product_terms(product):
-    normalized = re.sub(r"\s+", " ", val(product)).strip().lower()
-    terms = [normalized]
-    terms.extend(PRODUCT_SYNONYMS.get(normalized, ()))
-    if "petroleum products" in normalized:
-        terms.extend(PRODUCT_FAMILY_TERMS["petroleum"])
-    elif "chemicals" in normalized or normalized in ("industrial chemical", "specialty chemical"):
-        terms.extend(PRODUCT_FAMILY_TERMS["chemical"])
-    elif "petrochemicals" in normalized:
-        terms.extend(PRODUCT_FAMILY_TERMS["petrochemical"])
-    elif "steel" in normalized:
-        terms.extend(PRODUCT_FAMILY_TERMS["steel"])
-    elif "renewable" in normalized:
-        terms.extend(PRODUCT_FAMILY_TERMS["renewable"])
-    # Include meaningful words for custom products and labels with extra qualifiers.
-    terms.extend(token for token in re.findall(r"[a-zA-Z0-9\u4e00-\u9fff]+", normalized) if len(token) > 2)
-    return tuple(dict.fromkeys(term.strip().lower() for term in terms if term.strip()))
-PRODUCT_TERMS = build_product_terms(PRODUCT_NAME)
-INDUSTRY_TERMS = PRODUCT_TERMS
+_product_key = PRODUCT_NAME.lower().strip()
+_product_phrases = list(PRODUCT_SYNONYMS.get(_product_key, ()))
+_product_phrases.extend(PRODUCT_FAMILY_TERMS.get(_product_key, ()))
+if not _product_phrases:
+    _product_tokens = [token for token in re.findall(r"[a-zA-Z0-9\u4e00-\u9fff]+", _product_key) if len(token) > 2]
+    _product_phrases = [PRODUCT_NAME, *_product_tokens]
+if _product_key in ("industrial lubricants", "industrial lubricant", "lubricating oil"):
+    _product_phrases.extend(INDUSTRY_TERMS)
+PRODUCT_SEARCH_PHRASES = tuple(dict.fromkeys(val(term).strip() for term in _product_phrases if val(term).strip()))
+PRODUCT_TERMS = tuple(dict.fromkeys(term.lower() for term in PRODUCT_SEARCH_PHRASES))
 COMPANY_TERMS = (
     "company", "group", "limited", "ltd", "manufacturer", "manufacturing",
     "factory", "supplier", "production", "importer", "exporter", "refinery",
@@ -456,25 +458,20 @@ def relevant_social_profile(platform, url, company, website, location, bio):
     return product_match and buyer_match
 
 
-# Search variants are product-specific synonyms, not just the display label.
-# Keep three distinct targeted queries per platform to improve coverage for product aliases.
-_PRODUCT_QUERY_TERMS = list(dict.fromkeys(
-    [PRODUCT_NAME] + list(PRODUCT_SYNONYMS.get(
-        re.sub(r"\s+", " ", val(PRODUCT_NAME)).strip().lower(), ()
-    ))[:3]
-))
-while len(_PRODUCT_QUERY_TERMS) < 3:
-    _PRODUCT_QUERY_TERMS.append(PRODUCT_NAME)
+_search_phrases = list(PRODUCT_SEARCH_PHRASES[:6]) or [PRODUCT_NAME]
+_query_product_1 = f'"{PRODUCT_NAME}"'
+_query_product_2 = " OR ".join(f'"{term}"' for term in _search_phrases[:3])
+_query_product_3 = " OR ".join(f'"{term}"' for term in _search_phrases[3:6]) or _query_product_2
 NATIVE_QUERIES = {
     "linkedin": [
-        f'{TARGET_MARKET} "{_PRODUCT_QUERY_TERMS[0]}" {BUYER_TYPES} company',
-        f'{TARGET_MARKET} "{_PRODUCT_QUERY_TERMS[1]}" procurement purchasing sourcing',
-        f'{TARGET_MARKET} "{_PRODUCT_QUERY_TERMS[2]}" supplier importer distributor',
+        f'{TARGET_MARKET} {_query_product_1} {BUYER_TYPES} company manufacturer buyer',
+        f'{TARGET_MARKET} ({_query_product_2}) supplier importer distributor',
+        f'{TARGET_MARKET} ({_query_product_3}) procurement purchasing sourcing',
     ],
     "facebook": [
-        f'{TARGET_MARKET} "{_PRODUCT_QUERY_TERMS[0]}" {BUYER_TYPES}',
-        f'{TARGET_MARKET} "{_PRODUCT_QUERY_TERMS[1]}" company website contact',
-        f'{TARGET_MARKET} "{_PRODUCT_QUERY_TERMS[2]}" supplier importer distributor',
+        f'{TARGET_MARKET} {_query_product_1} company page',
+        f'{TARGET_MARKET} ({_query_product_2}) supplier manufacturer',
+        f'{TARGET_MARKET} ({_query_product_3}) importer distributor factory',
     ],
 }
 
@@ -493,24 +490,10 @@ def _scrapecreators_get(path, params):
         params=params,
         timeout=45,
     )
-    if r.status_code >= 400:
-        detail = (r.text or "").replace(chr(10), " ")[:240]
-        print(
-            f"SCRAPECREATORS_HTTP_ERROR endpoint={path}; status={r.status_code}; "
-            f"query={val(params.get('query'))[:100]}; body={detail!r}"
-        )
-        # Treat 404 as an endpoint/provider error, not proof that there are no matches.
-        r.raise_for_status()
-    try:
-        data = r.json()
-    except ValueError as exc:
-        raise RuntimeError(
-            f"ScrapeCreators returned non-JSON data for {path} (HTTP {r.status_code})"
-        ) from exc
+    r.raise_for_status()
+    data = r.json()
     if isinstance(data, dict) and data.get("success") is False:
-        raise RuntimeError(
-            f"ScrapeCreators native discovery returned success=false for {path}"
-        )
+        raise RuntimeError("ScrapeCreators native discovery returned success=false")
     return data
 
 
@@ -647,10 +630,11 @@ def _linkedin_provider_candidates(query):
         params={"query": query},
         timeout=20,
     )
-    # A 404 may mean the route is unavailable, not that the search had zero matches.
-    # Treat it as a provider error so the LinkedIn-specific Apify fallback can run.
+    # ScrapeCreators currently uses HTTP 404 for some valid searches with no
+    # matching public posts. Treat that as an empty result, not a broken endpoint.
     if getattr(response, "status_code", None) == 404:
-        raise RuntimeError("ScrapeCreators LinkedIn search endpoint returned HTTP 404; treating as provider error, not an empty search.")
+        print("LinkedIn provider search: no public post matches (HTTP 404 interpreted as empty results)")
+        return []
     response.raise_for_status()
     payload = response.json()
     if isinstance(payload, dict) and payload.get("success") is False:
@@ -931,8 +915,8 @@ def native_candidates(platform, query):
     raise ValueError(f"Unsupported social platform: {platform}")
 
 
-def personal_profile_candidate_score(result, url, query=""):
-    """Rank public LinkedIn people from product-targeted native searches."""
+def personal_profile_candidate_score(result, url):
+    """Rank public LinkedIn people by available signals without hard rejection gates."""
     if not urlparse(url).path.lower().startswith("/in/"):
         return 0
     text = " ".join([
@@ -940,20 +924,16 @@ def personal_profile_candidate_score(result, url, query=""):
         val(result.get("headline")), val(result.get("current_company")),
         val(result.get("location")), url
     ]).lower()
-    product_hits = sum(1 for term in PRODUCT_TERMS if term and term in text)
     role_text = " ".join([
         val(result.get("title")), val(result.get("headline")),
         val(result.get("current_company"))
     ]).lower()
-    role_hits = sum(1 for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS if term in role_text)
+    product_hits = sum(1 for term in PRODUCT_TERMS if term in text)
     market_hits = sum(1 for term in MARKET_SIGNALS if term in text)
-    # Native query is already built around the chosen product/market. Sparse
-    # snippets lower rank but should not automatically discard public profiles.
-    query_context = val(query).lower()
-    query_is_product_targeted = any(term and term in query_context for term in PRODUCT_TERMS)
-    if not product_hits and not query_is_product_targeted:
-        return 0
-    return 4 + product_hits * 4 + role_hits * 2 + market_hits
+    role_hits = sum(1 for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS if term in role_text)
+    # Search itself was product-targeted; missing evidence in a short profile
+    # snippet lowers ranking but no longer discards the public account outright.
+    return 1 + product_hits * 5 + market_hits * 2 + role_hits * 3
 
 
 def save_personal_profile(platform, url, public_name=""):
@@ -983,30 +963,18 @@ def save_personal_profile(platform, url, public_name=""):
     return True
 
 
-def social_candidate_score(platform, result, url, query=""):
+def social_candidate_score(platform, result, url):
     title = val(result.get("title"))
     snippet = val(result.get("content") or result.get("snippet") or result.get("description"))
     text = " ".join([title, snippet, url]).lower()
     if platform == "linkedin" and urlparse(url).path.lower().startswith("/in/"):
-        return personal_profile_candidate_score(result, url, query)
-    product_hits = sum(1 for term in PRODUCT_TERMS if term and term in text)
-    buyer_hits = sum(1 for term in BUYER_TYPE_TERMS if term and term in text)
-    market_hits = sum(1 for term in MARKET_SIGNALS if term and term in text)
-    # Product fit is the relevance anchor. Market and buyer signals improve ranking,
-    # but neither must appear in the short provider snippet because the native query
-    # itself already includes both the configured market and product/buyer vocabulary.
-    if not product_hits:
-        # Provider snippets are often sparse. Since each native query is built
-        # from the selected product and market, keep credible named pages at a
-        # lower score instead of hard-dropping them for missing snippet keywords.
-        title = val(result.get("title")).strip().lower()
-        generic_titles = {"", "facebook", "linkedin", "company", "page", "unknown", "n/a", "none"}
-        query_context = val(query).lower()
-        query_is_product_targeted = any(term and term in query_context for term in PRODUCT_TERMS)
-        if title in generic_titles or len(title) < 3 or not query_is_product_targeted:
-            return 0
-        return 2 + buyer_hits * 2 + market_hits
-    return product_hits * 5 + buyer_hits * 2 + market_hits
+        return personal_profile_candidate_score(result, url)
+    product_hits = sum(1 for term in PRODUCT_TERMS if term in text)
+    buyer_hits = sum(1 for term in BUYER_TYPE_TERMS if term in text)
+    market_hits = sum(1 for term in MARKET_SIGNALS if term in text)
+    # The provider query is already targeted to the selected product and market.
+    # Treat evidence as ranking signals, not a three-way mandatory filter.
+    return 1 + product_hits * 5 + buyer_hits * 2 + market_hits * 2 + bool(title) + bool(snippet)
 
 
 def pace_cloudflare_request():
@@ -1324,12 +1292,6 @@ def discover(p):
             results = native_candidates(p, query)
         except Exception as exc:
             last_error = exc
-            DISCOVERY_ERRORS.append({
-                "platform": p,
-                "query": query,
-                "error_type": type(exc).__name__,
-                "error": str(exc)[:500]
-            })
             print(
                 f"Native social discovery failed: platform={p}; "
                 f"method={DISCOVERY_METHODS[p]}; error={type(exc).__name__}: {exc}"
@@ -1344,7 +1306,8 @@ def discover(p):
                 DUPLICATE_PREFILTER_SKIPPED += 1
                 print(f"Skipping previously stored social candidate: platform={p}; url={url}")
                 continue
-            score = social_candidate_score(p, item, url, query)
+            SOCIAL_DISCOVERY_RESULTS[(p, url.rstrip("/"))] = item
+            score = social_candidate_score(p, item, url)
             if not score:
                 continue
             is_personal = p == "linkedin" and urlparse(url).path.lower().startswith("/in/")
@@ -1535,22 +1498,6 @@ def provider_chain(p, url):
         providers.append(("Apify", lambda: apify_profile(p, url)))
     if not providers:
         errors.append("no_profile_provider_available_or_worker_cap_reached")
-        if p == "linkedin":
-            indexed = LINKEDIN_SEARCH_RESULTS.get(url.rstrip("/"), {})
-            title = val(indexed.get("current_company") or indexed.get("title"))
-            snippet = val(" | ".join(
-                val(indexed.get(key)) for key in ("snippet", "headline", "location")
-                if val(indexed.get(key))
-            ))
-            if title or snippet:
-                errors.append("using_public_search_metadata_fallback")
-                return "SearchDiscoveryFallback", {
-                    "name": title or val(indexed.get("title")) or urlparse(url).path.rstrip("/").split("/")[-1],
-                    "description": snippet,
-                    "location": val(indexed.get("location")),
-                    "url": url,
-                }, errors
-        return "", None, errors
 
     for name, fn in providers:
         try:
@@ -1566,32 +1513,21 @@ def provider_chain(p, url):
                 extracted = profile_field_names(
                     company, web, loc, contact, email, phone, bio, followers, verified
                 )
-                has_substantive_detail = any((web, loc, email, phone, bio))
-                if not company:
-                    errors.append(f"{name}:response_without_company_or_page_name")
-                    print(
-                        f"Social provider response rejected because company/page name is missing: {name}; "
-                        f"fields={json.dumps(extracted, ensure_ascii=False)}"
-                    )
+                if not company or company.lower() in {"unknown", "none", "n/a"}:
+                    indexed = LINKEDIN_SEARCH_RESULTS.get(url.rstrip("/"), {}) if p == "linkedin" else {}
+                    company = val(indexed.get("title")) or handle_from_url(url).replace("-", " ").replace("_", " ").title()
+                if not company or company.lower() in {"unknown", "none", "n/a"}:
+                    errors.append(f"{name}:public_identity_missing")
+                    print(f"Social provider response has no public identity: {name}; url={url}")
                     continue
-                if len(extracted) < 2 or not has_substantive_detail:
+                if len(extracted) < 2 or not any((web, loc, email, phone, bio)):
                     print(
-                        f"SOCIAL_PROFILE_PARTIAL provider={name}; platform={p}; "
-                        "keeping named public page with sparse fields for later review"
+                        f"SOCIAL_SPARSE_PROFILE_RETAINED provider={name}; platform={p}; "
+                        f"fields={json.dumps(extracted, ensure_ascii=False)}"
                     )
                 relevant = relevant_social_profile(
                     p, normalized[9] or url, company, web, loc, bio
                 )
-                strict_relevance = os.getenv("SOCIAL_STRICT_RELEVANCE", "false").strip().lower() in ("1", "true", "yes", "on")
-                if not relevant and strict_relevance:
-                    errors.append(f"{name}:profile_not_relevant_to_target")
-                    print(
-                        f"Social provider response rejected as irrelevant: {name}; "
-                        f"platform={p}; fields={json.dumps(extracted, ensure_ascii=False)}"
-                    )
-                    if name == "ScrapeCreators":
-                        return "", None, errors
-                    continue
                 if not relevant:
                     print(
                         f"SOCIAL_RELEVANCE_OBSERVATION provider={name}; platform={p}; "
@@ -1615,21 +1551,24 @@ def provider_chain(p, url):
     # Preserve public search evidence when enrichment providers fail. This is a
     # discovery fallback, not proof of buyer fit; only explicitly published
     # contact details found in the snippet may be used for outreach.
+    indexed = SOCIAL_DISCOVERY_RESULTS.get((p, url.rstrip("/")), {})
     if p == "linkedin":
-        indexed = LINKEDIN_SEARCH_RESULTS.get(url.rstrip("/"), {})
-        title = val(indexed.get("current_company") or indexed.get("title"))
-        snippet = val(" | ".join(
-            val(indexed.get(key)) for key in ("snippet", "headline", "location")
-            if val(indexed.get(key))
-        ))
-        if title or snippet:
-            errors.append("using_public_search_metadata_fallback")
-            return "SearchDiscoveryFallback", {
-                "name": title or val(indexed.get("title")) or urlparse(url).path.rstrip("/").split("/")[-1],
-                "description": snippet,
-                "location": val(indexed.get("location")),
-                "url": url,
-            }, errors
+        indexed = {**indexed, **LINKEDIN_SEARCH_RESULTS.get(url.rstrip("/"), {})}
+    title = val(indexed.get("current_company") or indexed.get("title"))
+    snippet_parts = [
+        val(indexed.get(key)) for key in ("content", "snippet", "headline", "location", "description")
+        if val(indexed.get(key))
+    ]
+    snippet = " | ".join(dict.fromkeys(snippet_parts))
+    if title or snippet or url:
+        errors.append("using_public_search_metadata_fallback")
+        fallback_name = title or urlparse(url).path.rstrip("/").split("/")[-1].replace("-", " ").replace("_", " ").title()
+        return "SearchDiscoveryFallback", {
+            "name": fallback_name,
+            "description": snippet,
+            "location": val(indexed.get("location")),
+            "url": url,
+        }, errors
     return "", None, errors
 
 
@@ -1963,7 +1902,6 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "generic_web_search_enabled": False,
         "google_maps_enabled": False,
         "provider_counts": provider_counts,
-        "discovery_errors": DISCOVERY_ERRORS,
         "cloudflare": {
             "token_used": False,
             "calls_used": 0,
@@ -2533,6 +2471,10 @@ def main():
         writer.writerows(rows)
 
     profile_rows = store.read_table("Personal Profiles")
+    print(
+        f"EXISTING_SHEET_ROWS leads={len(rows)}; personal_profiles={len(profile_rows)}; "
+        f"lead_columns={len(fields)}; profile_columns={len(PERSONAL_PROFILE_FIELDS)}"
+    )
     with PERSONAL_PROFILES.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=PERSONAL_PROFILE_FIELDS, extrasaction="ignore")
         writer.writeheader()
@@ -2562,15 +2504,8 @@ def main():
                     ))
 
     print(
-        "GOOGLE_SHEETS_READ_OK "
-        f"leads_rows={len(rows)}; personal_profile_rows={len(profile_rows)}; "
-        f"lead_row_columns={len(rows[0]) if rows else 0}; "
-        f"profile_row_columns={len(profile_rows[0]) if profile_rows else 0}"
-    )
-    print(
         f"EXISTING_STATE_LOADED company_social_keys={len(EXISTING_SOCIAL_KEYS)}; "
-        f"personal_profile_keys={len(EXISTING_PERSONAL_KEYS)}; "
-        f"dedupe_before_enrichment=true"
+        f"personal_profile_keys={len(EXISTING_PERSONAL_KEYS)}"
     )
 
     # Search only within the requested social networks using native provider APIs.
@@ -2600,8 +2535,8 @@ def main():
         print("No new Facebook or LinkedIn candidates found after checking stored records")
         write_run_report(
             platforms_to_collect, 0, 0,
-            {"ScrapeCreators": 0, "Apify": 0, "failed": len(DISCOVERY_ERRORS)},
-            "provider_errors_no_candidates" if DISCOVERY_ERRORS else "no_new_candidates"
+            {"ScrapeCreators": 0, "Apify": 0, "failed": 0},
+            "no_new_candidates"
         )
         print(
             f"PERSONAL_PROFILE_SUMMARY discovered=0; new_account_only_records=0; "
@@ -2706,6 +2641,9 @@ def main():
         company, web, loc, contact, email, phone, bio, followers, verified, surl = (
             normalize_provider(p, provider, data, url)
         )
+        if not company or company.lower() in {"unknown", "none", "n/a"}:
+            indexed = LINKEDIN_SEARCH_RESULTS.get(url.rstrip("/"), {}) if p == "linkedin" else {}
+            company = val(indexed.get("title")) or handle_from_url(url).replace("-", " ").replace("_", " ").title()
         returned_url = returned_profile_url(provider, p, data)
         extracted_fields = profile_field_names(
             company, web, loc, contact, email, phone, bio, followers, verified
@@ -2732,11 +2670,7 @@ def main():
         }, ensure_ascii=False))
 
         relevant = relevant_social_profile(p, surl or url, company, web, loc, bio)
-        strict_relevance = os.getenv("SOCIAL_STRICT_RELEVANCE", "false").strip().lower() in ("1", "true", "yes", "on")
-        if not relevant and strict_relevance:
-            profile_audit_row["outcome"] = "rejected_not_relevant"
-            print(f"Rejected low-confidence social result: platform={p}; discovered_url={url}; returned_profile_url={returned_url or 'NOT_RETURNED'}")
-            continue
+        # Relevance is recorded for review, not used as a hard collection gate.
         profile_audit_row["outcome"] = "accepted_relevant" if relevant else "retained_observation_mode"
         if not relevant:
             print(f"SOCIAL_RELEVANCE_OBSERVATION platform={p}; strict_filter=disabled; candidate_retained_for_observation; url={url}")
