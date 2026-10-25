@@ -18,35 +18,24 @@ TARGET_MARKET = os.getenv("TARGET_MARKET", "China").strip() or "China"
 
 
 def infer_buyer_types(product):
-    """Infer the best-fit B2B customer roles from the selected product/sector."""
-    value = str(product or "").strip().lower()
-    petroleum = ("petroleum", "crude oil", "fuel oil", "gasoline", "diesel", "jet fuel",
-                 "kerosene", "lpg", "lng", "bitumen", "asphalt", "base oil", "lubricant",
-                 "grease", "hydraulic oil", "gear oil", "compressor oil", "turbine oil",
-                 "paraffin", "petroleum coke", "sulfur")
-    chemicals = ("chemical", "caustic soda", "soda ash", "methanol", "ethanol", "ammonia",
-                 "urea", "chlorine", "acid", "peroxide", "solvent", "acetone", "toluene",
-                 "xylene", "glycol", "glycerin", "titanium dioxide", "carbon black", "pigment",
-                 "resin", "adhesive", "detergent", "surfactant", "water-treatment", "agrochemical")
-    petrochemicals = ("petrochemical", "ethylene", "propylene", "polyethylene", "polypropylene",
-                      "pvc", "pet resin", "polystyrene", "styrene", "butadiene", "aromatic",
-                      "pta", "paraxylene", "phenol", "acetic acid", "synthetic rubber")
-    steel = ("steel", "rebar", "wire rod", "billet", "slab", "stainless", "hot-rolled",
-             "cold-rolled", "galvanized", "color-coated", "steel pipe", "steel scrap", "structural steel")
-    renewable = ("renewable", "solar", "photovoltaic", "pv module", "inverter", "wind turbine",
-                 "battery", "bess", "green hydrogen", "electrolyzer")
-    if any(term in value for term in renewable):
-        return "renewable-energy project developers, EPC contractors, utilities, installers, equipment integrators, procurement teams"
-    if any(term in value for term in steel):
-        return "steel service centers, fabricators, construction and infrastructure contractors, machinery makers, industrial consumers, importers, procurement teams"
-    if any(term in value for term in petrochemicals):
-        return "plastics and polymer processors, converters, packaging manufacturers, chemical formulators, industrial consumers, importers, procurement teams"
-    if any(term in value for term in chemicals):
-        return "industrial consumers, formulators, manufacturers using the chemical as a raw material, importers, distributors, procurement teams"
-    if any(term in value for term in petroleum):
-        return "industrial consumers, refineries and processors where relevant, fleet and plant operators, importers, distributors, procurement teams"
-    return "direct B2B buyers, industrial consumers, raw-material consumers, importers, procurement teams, product-specific end users"
-
+    """Infer buyer roles from the actual selected product, not one universal template."""
+    value = re.sub(r"\s+", " ", str(product or "").strip().lower())
+    profiles = [
+        (("petroleum products — all", "petroleum products - all", "crude oil", "fuel oil", "gasoline", "petrol", "diesel", "gasoil", "jet fuel", "aviation fuel", "kerosene", "lpg", "lng", "bitumen", "asphalt", "base oil", "lubricant", "grease", "hydraulic oil", "gear oil", "compressor oil", "turbine oil", "paraffin wax", "petroleum coke", "sulfur"),
+         "refineries, asphalt and road contractors, fuel distributors, lubricant blenders, industrial plants, fleet operators, importers, distributors and procurement teams"),
+        (("chemicals — all", "chemicals - all", "industrial chemical", "specialty chemical", "caustic soda", "soda ash", "methanol", "ethanol", "ammonia", "urea", "chlorine", "acid", "hydrogen peroxide", "solvent", "acetone", "toluene", "xylene", "glycol", "glycerin", "titanium dioxide", "carbon black", "pigment", "resin", "adhesive", "detergent", "surfactant", "water-treatment", "agrochemical"),
+         "chemical manufacturers and formulators, industrial plants, water-treatment operators, agriculture-input distributors, importers, distributors and procurement teams"),
+        (("petrochemicals — all", "petrochemicals - all", "petrochemical", "ethylene", "propylene", "polyethylene", "polypropylene", "pvc", "pet resin", "polystyrene", "styrene", "butadiene", "aromatics", "monoethylene glycol", "meg", "pta", "paraxylene", "phenol", "acetic acid", "synthetic rubber"),
+         "polymer and plastics processors, packaging manufacturers, converters, synthetic-rubber producers, chemical distributors, importers and procurement teams"),
+        (("steel — all", "steel - all", "steel", "rebar", "wire rod", "billet", "slab", "stainless", "hot-rolled", "cold-rolled", "galvanized", "color-coated", "steel pipe", "steel scrap", "structural steel"),
+         "steel service centers, fabricators, construction and infrastructure contractors, pipe makers, machinery manufacturers, metal processors, steel traders and procurement teams"),
+        (("renewable energy — all", "renewable energy - all", "renewable", "solar", "photovoltaic", "pv module", "solar cell", "inverter", "wind turbine", "battery", "bess", "green hydrogen", "electrolyzer", "electrolyser"),
+         "renewable-energy project developers, EPC contractors, utilities, solar and wind installers, battery integrators, equipment distributors and procurement teams"),
+    ]
+    for terms, roles in profiles:
+        if any(term in value for term in terms):
+            return roles
+    return "direct B2B buyers, industrial consumers, manufacturers using the selected product, importers, distributors, traders, procurement teams and product-specific end users"
 
 # The system infers customer types; no manual buyer-type field is required.
 BUYER_TYPES = infer_buyer_types(PRODUCT_NAME)
@@ -268,13 +257,69 @@ INDUSTRY_TERMS = (
     "润滑油", "工业润滑油", "润滑脂", "工业润滑脂", "润滑剂",
     "润滑油厂家", "润滑油生产", "润滑油制造商", "润滑脂生产厂家"
 )
-# Keep the detailed legacy synonym set for the default pilot; arbitrary products
-# use their supplied phrase and meaningful tokens instead of lubricant-only gates.
-if PRODUCT_NAME.lower() in ("industrial lubricants", "industrial lubricant", "lubricating oil"):
-    PRODUCT_TERMS = INDUSTRY_TERMS
-else:
+# Product-aware synonyms: selected labels are translated into terms buyers use on social pages.
+PRODUCT_SYNONYM_GROUPS = {
+    "petroleum products": ("crude oil", "fuel oil", "gasoline", "petrol", "diesel", "gasoil", "jet fuel", "aviation fuel", "kerosene", "lpg", "lng", "bitumen", "asphalt", "base oil", "lubricant", "grease", "hydraulic oil", "gear oil", "compressor oil", "turbine oil", "paraffin wax", "petroleum coke", "sulfur"),
+    "chemicals": ("industrial chemicals", "specialty chemicals", "caustic soda", "soda ash", "methanol", "ethanol", "ammonia", "urea", "chlorine", "hydrochloric acid", "sulfuric acid", "hydrogen peroxide", "industrial solvents", "acetone", "toluene", "xylene", "ethylene glycol", "glycerin", "titanium dioxide", "carbon black", "pigments", "resins", "adhesives", "detergents", "surfactants", "water-treatment chemicals", "agrochemicals"),
+    "petrochemicals": ("ethylene", "propylene", "polyethylene", "polypropylene", "pvc resin", "pet resin", "polystyrene", "styrene monomer", "butadiene", "aromatics", "monoethylene glycol", "pta", "paraxylene", "phenol", "acetic acid", "synthetic rubber"),
+    "steel": ("hot-rolled coil", "cold-rolled coil", "galvanized steel", "pre-painted steel", "color-coated steel", "rebar", "wire rod", "billets", "slabs", "steel pipes", "stainless steel", "steel scrap", "structural steel", "flat steel"),
+    "renewable energy": ("solar panels", "pv modules", "solar cells", "solar inverters", "solar mounting structures", "wind turbines", "wind-turbine components", "battery energy storage systems", "bess", "lithium-ion batteries", "green hydrogen", "electrolyzers"),
+}
+PRODUCT_ALIASES = {
+    "bitumen / asphalt": ("bitumen", "asphalt", "road bitumen", "paving bitumen", "asphalt binder", "bitumen emulsion", "asphalt mix", "沥青"),
+    "base oils": ("base oil", "base oils", "lubricant base stock", "group i base oil", "group ii base oil", "group iii base oil"),
+    "industrial lubricants": ("industrial lubricant", "industrial lubricants", "lubricating oil", "lubricating oils", "lubricant blending", "润滑油", "工业润滑油"),
+    "industrial greases": ("industrial grease", "lubricating grease", "greases", "润滑脂"),
+    "automotive lubricants": ("automotive lubricant", "automotive lubricants", "engine oil", "motor oil", "transmission fluid", "车用润滑油"),
+    "hydraulic oils": ("hydraulic oil", "hydraulic oils", "hydraulic fluid"),
+    "gear oils": ("gear oil", "gear oils", "industrial gear lubricant"),
+    "compressor oils": ("compressor oil", "compressor oils"),
+    "turbine oils": ("turbine oil", "turbine oils"),
+    "metalworking fluids": ("metalworking fluid", "metalworking fluids", "cutting fluid", "machining fluid", "coolant"),
+    "paraffin wax": ("paraffin wax", "fully refined paraffin wax", "semi refined paraffin wax"),
+    "petroleum coke": ("petroleum coke", "petcoke", "pet coke"),
+    "sulfur": ("sulfur", "sulphur", "granular sulfur", "sulfur prills"),
+    "caustic soda": ("caustic soda", "sodium hydroxide", "naoh"),
+    "soda ash": ("soda ash", "sodium carbonate"),
+    "methanol": ("methanol", "methyl alcohol"),
+    "urea": ("urea", "fertilizer urea", "prilled urea", "granular urea"),
+    "hydrochloric acid": ("hydrochloric acid", "hcl", "muriatic acid"),
+    "sulfuric acid": ("sulfuric acid", "sulphuric acid", "h2so4"),
+    "hydrogen peroxide": ("hydrogen peroxide", "h2o2"),
+    "ethylene glycol": ("ethylene glycol", "meg", "monoethylene glycol"),
+    "titanium dioxide": ("titanium dioxide", "tio2"),
+    "carbon black": ("carbon black",),
+    "polyethylene (pe)": ("polyethylene", "pe resin", "hdpe", "ldpe", "lldpe"),
+    "polypropylene (pp)": ("polypropylene", "pp resin"),
+    "pvc resin": ("pvc resin", "polyvinyl chloride"),
+    "pet resin": ("pet resin", "polyethylene terephthalate"),
+    "hot-rolled coil": ("hot-rolled coil", "hot rolled steel", "hrc"),
+    "cold-rolled coil": ("cold-rolled coil", "cold rolled steel", "crc"),
+    "galvanized steel": ("galvanized steel", "galvanised steel", "gi coil"),
+    "rebar": ("rebar", "reinforcing steel", "reinforcing bar"),
+    "wire rod": ("wire rod", "steel wire rod"),
+    "steel pipes and tubes": ("steel pipe", "steel pipes", "steel tube", "steel tubes"),
+    "solar panels / pv modules": ("solar panel", "solar panels", "pv module", "photovoltaic module"),
+    "solar inverters": ("solar inverter", "pv inverter"),
+    "wind turbines": ("wind turbine", "wind turbines"),
+    "battery energy storage systems (bess)": ("battery energy storage", "bess", "energy storage system"),
+    "lithium-ion batteries": ("lithium-ion battery", "lithium ion battery", "li-ion battery"),
+}
+_product_key = re.sub(r"\s+", " ", PRODUCT_NAME.lower()).strip()
+_product_family = next(
+    (key for key in PRODUCT_SYNONYM_GROUPS
+     if _product_key in {key, f"{key} — all", f"{key} - all"}),
+    ""
+)
+PRODUCT_TERMS = PRODUCT_SYNONYM_GROUPS.get(
+    _product_family, PRODUCT_ALIASES.get(_product_key, ())
+)
+if not PRODUCT_TERMS:
     _product_tokens = [token for token in re.findall(r"[a-zA-Z0-9\u4e00-\u9fff]+", PRODUCT_NAME.lower()) if len(token) > 2]
     PRODUCT_TERMS = tuple(dict.fromkeys([PRODUCT_NAME.lower(), *_product_tokens]))
+else:
+    PRODUCT_TERMS = tuple(dict.fromkeys((PRODUCT_NAME.lower(), *PRODUCT_TERMS)))
+
 COMPANY_TERMS = (
     "company", "group", "limited", "ltd", "manufacturer", "manufacturing",
     "factory", "supplier", "production", "importer", "exporter", "refinery",
@@ -804,7 +849,7 @@ def native_candidates(platform, query):
 
 
 def personal_profile_candidate_score(result, url):
-    """Score public LinkedIn people only when China, industry and role evidence exists."""
+    """Score public LinkedIn people using role evidence; query context supplies product/market."""
     if not urlparse(url).path.lower().startswith("/in/"):
         return 0
     text = " ".join([
@@ -812,22 +857,18 @@ def personal_profile_candidate_score(result, url):
         val(result.get("headline")), val(result.get("current_company")),
         val(result.get("location")), url
     ]).lower()
-    if not any(term in text for term in PRODUCT_TERMS):
-        return 0
-    if not any(term in text for term in MARKET_SIGNALS):
-        return 0
-    # A role mentioned only in a post can describe somebody else. Require the
-    # buyer/decision-maker evidence in public author identity metadata instead.
     role_text = " ".join([
         val(result.get("title")), val(result.get("headline")),
         val(result.get("current_company"))
     ]).lower()
-    if not any(term in role_text for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS):
+    product_hits = sum(1 for term in PRODUCT_TERMS if term in text)
+    market_hits = sum(1 for term in MARKET_SIGNALS if term in text)
+    role_hits = sum(1 for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS if term in role_text)
+    # Do not demand all three signals in a short snippet. Search itself is scoped
+    # to product + target market; a credible business role is enough to rank a person.
+    if not role_hits and not product_hits:
         return 0
-    return 10 + sum(1 for term in MARKET_SIGNALS if term in text) + sum(
-        1 for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS if term in role_text
-    )
-
+    return 6 + min(product_hits, 4) * 2 + min(role_hits, 4) + min(market_hits, 2)
 
 def save_personal_profile(platform, url, public_name=""):
     """Persist only public account identity/provenance; never store contact details."""
@@ -862,14 +903,15 @@ def social_candidate_score(platform, result, url):
     text = " ".join([title, snippet, url]).lower()
     if platform == "linkedin" and urlparse(url).path.lower().startswith("/in/"):
         return personal_profile_candidate_score(result, url)
-    lubricant_hits = sum(1 for term in PRODUCT_TERMS if term in text)
+    product_hits = sum(1 for term in PRODUCT_TERMS if term in text)
     buyer_hits = sum(1 for term in BUYER_TYPE_TERMS if term in text)
+    company_hits = sum(1 for term in COMPANY_TERMS if term in text)
     market_hits = sum(1 for term in MARKET_SIGNALS if term in text)
-    # Require product, buyer-type and target-market evidence in the candidate itself.
-    if not lubricant_hits or not buyer_hits or not market_hits:
+    # The search query already contains product + target market. Short snippets
+    # often omit location or buyer words, so those are ranking signals, not gates.
+    if not product_hits and not (buyer_hits and company_hits):
         return 0
-    return lubricant_hits * 5 + buyer_hits * 3 + market_hits * 2
-
+    return product_hits * 5 + buyer_hits * 2 + company_hits + market_hits * 2
 
 def pace_cloudflare_request():
     global LAST_CLOUDFLARE_REQUEST_AT
@@ -2412,8 +2454,21 @@ def main():
                     ))
 
     print(
-        f"EXISTING_STATE_LOADED company_social_keys={len(EXISTING_SOCIAL_KEYS)}; "
+        f"EXISTING_STATE_LOADED sheet_leads_rows={len(rows)}; "
+        f"sheet_personal_profile_rows={len(profile_rows)}; "
+        f"company_social_keys={len(EXISTING_SOCIAL_KEYS)}; "
         f"personal_profile_keys={len(EXISTING_PERSONAL_KEYS)}"
+    )
+    if not isinstance(rows, list) or not isinstance(profile_rows, list):
+        raise RuntimeError("Google Sheets read returned an invalid row collection; stopping before social providers.")
+    print(
+        "PRODUCT_PROFILE " + json.dumps({
+            "selected_product": PRODUCT_NAME,
+            "target_market": TARGET_MARKET,
+            "inferred_buyer_types": BUYER_TYPES,
+            "product_terms_count": len(PRODUCT_TERMS),
+            "product_terms_sample": list(PRODUCT_TERMS[:12])
+        }, ensure_ascii=False)
     )
 
     # Search only within the requested social networks using native provider APIs.
