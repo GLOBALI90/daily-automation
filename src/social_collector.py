@@ -459,7 +459,7 @@ def relevant_social_profile(platform, url, company, website, location, bio):
 # Keep three distinct targeted queries per platform to improve coverage for product aliases.
 _PRODUCT_QUERY_TERMS = list(dict.fromkeys(
     [PRODUCT_NAME] + list(PRODUCT_SYNONYMS.get(
-        re.sub(r"\\s+", " ", PRODUCT_NAME).strip().lower(), ()
+        re.sub(r"\s+", " ", val(PRODUCT_NAME)).strip().lower(), ()
     ))[:3]
 ))
 while len(_PRODUCT_QUERY_TERMS) < 3:
@@ -493,7 +493,7 @@ def _scrapecreators_get(path, params):
         timeout=45,
     )
     if r.status_code >= 400:
-        detail = (r.text or "").replace("\\n", " ")[:240]
+        detail = (r.text or "").replace(chr(10), " ")[:240]
         print(
             f"SCRAPECREATORS_HTTP_ERROR endpoint={path}; status={r.status_code}; "
             f"query={val(params.get('query'))[:100]}; body={detail!r}"
