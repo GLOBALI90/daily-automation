@@ -1227,8 +1227,8 @@ def discover(p):
         )
     print(f"SOCIAL_ONLY_GUARD platform={p}; external_web_search_used=false; maps_used=false")
     return (
-        [(score, url, query, method) for score, url, query, method in selected]
-        + [(score, url, query, method) for score, url, query, method in selected_people]
+        [(url, query, method) for score, url, query, method in selected]
+        + [(url, query, method) for score, url, query, method in selected_people]
     )
 
 def get_json(url, headers=None, params=None, timeout=45):
