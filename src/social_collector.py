@@ -373,13 +373,16 @@ def relevant_social_profile(platform, url, company, website, location, bio):
     return product_match and buyer_match
 
 
-def product_search_terms(limit=8):
-    """Return a compact selected-product vocabulary for provider-native queries."""
+def product_search_terms(limit=3):
+    """Return a few family-specific synonyms without over-constraining provider queries."""
     terms = []
-    for term in PRODUCT_TERMS:
+    source_terms = _selected_synonyms or _product_tokens
+    product_words = set(re.findall(r"[a-zA-Z0-9\\u4e00-\\u9fff]+", PRODUCT_NAME.lower()))
+    for term in source_terms:
         cleaned = val(term)
-        if cleaned and cleaned.lower() not in {PRODUCT_NAME.lower(), TARGET_MARKET.lower()} and cleaned not in terms:
-            terms.append(cleaned)
+        if not cleaned or cleaned.lower() in product_words or cleaned.lower() in terms:
+            continue
+        terms.append(cleaned.lower())
         if len(terms) >= limit:
             break
     return " ".join(f'"{term}"' if " " in term else term for term in terms)
