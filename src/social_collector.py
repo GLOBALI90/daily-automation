@@ -61,6 +61,7 @@ MAX_CLOUDFLARE_CALLS_PER_RUN = 2
 CLOUDFLARE_AUDIT = []
 PROFILE_AUDIT = []
 DISCOVERY_COUNTS = {}
+DISCOVERY_ERRORS = []
 CLOUDFLARE_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_AUDIT = []
@@ -484,12 +485,13 @@ DISCOVERY_METHODS = {
 def _scrapecreators_get(path, params):
     if not SCRAPECREATORS:
         raise RuntimeError("SCRAPECREATORS_API_KEY missing for native social discovery")
-    r = session.get(
-        "https://api.scrapecreators.com" + path,
-        headers={"x-api-key": SCRAPECREATORS, "Accept": "application/json"},
-        params=params,
-        timeout=45,
-    )
+    request_url = "https://api.scrapecreators.com" + path
+    request_headers = {"x-api-key": SCRAPECREATORS, "Accept": "application/json"}
+    r = session.get(request_url, headers=request_headers, params=params, timeout=45)
+    if getattr(r, "status_code", None) in (429, 500, 502, 503, 504):
+        print(f"SCRAPECREATORS_TRANSIENT_RETRY endpoint={path}; status={r.status_code}; retry=1")
+        time.sleep(2)
+        r = session.get(request_url, headers=request_headers, params=params, timeout=45)
     r.raise_for_status()
     data = r.json()
     if isinstance(data, dict) and data.get("success") is False:
@@ -624,17 +626,18 @@ def _linkedin_provider_candidates(query):
     """
     if not SCRAPECREATORS:
         raise RuntimeError("SCRAPECREATORS_API_KEY missing for LinkedIn provider search")
-    response = session.get(
-        "https://api.scrapecreators.com/v1/linkedin/search/posts",
-        headers={"x-api-key": SCRAPECREATORS, "Accept": "application/json"},
-        params={"query": query},
-        timeout=20,
-    )
-    # ScrapeCreators currently uses HTTP 404 for some valid searches with no
-    # matching public posts. Treat that as an empty result, not a broken endpoint.
+    request_url = "https://api.scrapecreators.com/v1/linkedin/search/posts"
+    request_headers = {"x-api-key": SCRAPECREATORS, "Accept": "application/json"}
+    request_params = {"query": query}
+    response = session.get(request_url, headers=request_headers, params=request_params, timeout=20)
+    if getattr(response, "status_code", None) in (429, 500, 502, 503, 504):
+        print(f"SCRAPECREATORS_TRANSIENT_RETRY endpoint=/v1/linkedin/search/posts; status={response.status_code}; retry=1")
+        time.sleep(2)
+        response = session.get(request_url, headers=request_headers, params=request_params, timeout=20)
+    # A 404 can mean the LinkedIn search route is unavailable, not that no posts exist.
+    # Raise it so the LinkedIn-specific Apify provider can act as fallback.
     if getattr(response, "status_code", None) == 404:
-        print("LinkedIn provider search: no public post matches (HTTP 404 interpreted as empty results)")
-        return []
+        raise RuntimeError("ScrapeCreators LinkedIn search endpoint returned HTTP 404")
     response.raise_for_status()
     payload = response.json()
     if isinstance(payload, dict) and payload.get("success") is False:
@@ -899,6 +902,10 @@ def native_candidates(platform, query):
             try:
                 out.extend(_linkedin_provider_candidates(query))
             except Exception as exc:
+                DISCOVERY_ERRORS.append({
+                    "platform": "linkedin", "provider": "ScrapeCreators",
+                    "error_type": type(exc).__name__, "error": str(exc)[:500],
+                })
                 print(f"ScrapeCreators LinkedIn native search failed: {type(exc).__name__}: {exc}")
         if APIFY:
             try:
@@ -908,6 +915,10 @@ def native_candidates(platform, query):
                         seen.add(url)
                         out.append(item)
             except Exception as exc:
+                DISCOVERY_ERRORS.append({
+                    "platform": "linkedin", "provider": "Apify",
+                    "error_type": type(exc).__name__, "error": str(exc)[:500],
+                })
                 print(f"Apify LinkedIn native search failed: {type(exc).__name__}: {exc}")
         if not out:
             print("LinkedIn native search returned no candidates; no generic web fallback will be used.")
@@ -1292,6 +1303,10 @@ def discover(p):
             results = native_candidates(p, query)
         except Exception as exc:
             last_error = exc
+            DISCOVERY_ERRORS.append({
+                "platform": p, "query": query, "method": DISCOVERY_METHODS[p],
+                "error_type": type(exc).__name__, "error": str(exc)[:500],
+            })
             print(
                 f"Native social discovery failed: platform={p}; "
                 f"method={DISCOVERY_METHODS[p]}; error={type(exc).__name__}: {exc}"
@@ -1902,6 +1917,7 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "generic_web_search_enabled": False,
         "google_maps_enabled": False,
         "provider_counts": provider_counts,
+        "discovery_errors": DISCOVERY_ERRORS,
         "cloudflare": {
             "token_used": False,
             "calls_used": 0,
@@ -2535,8 +2551,8 @@ def main():
         print("No new Facebook or LinkedIn candidates found after checking stored records")
         write_run_report(
             platforms_to_collect, 0, 0,
-            {"ScrapeCreators": 0, "Apify": 0, "failed": 0},
-            "no_new_candidates"
+            {"ScrapeCreators": 0, "Apify": 0, "failed": len(DISCOVERY_ERRORS)},
+            "provider_errors_no_candidates" if DISCOVERY_ERRORS else "no_new_candidates"
         )
         print(
             f"PERSONAL_PROFILE_SUMMARY discovered=0; new_account_only_records=0; "
@@ -2575,7 +2591,7 @@ def main():
     provider_counts = {
         "ScrapeCreators": 0,
         "Apify": 0,
-        "failed": 0
+        "failed": len(DISCOVERY_ERRORS)
     }
 
     personal_profiles_added = 0
