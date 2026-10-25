@@ -61,6 +61,9 @@ MAX_CLOUDFLARE_CALLS_PER_RUN = 2
 CLOUDFLARE_AUDIT = []
 PROFILE_AUDIT = []
 DISCOVERY_COUNTS = {}
+DISCOVERY_ERRORS = []
+SHEET_LEADS_ROWS_READ = 0
+SHEET_PERSONAL_ROWS_READ = 0
 CLOUDFLARE_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_AUDIT = []
@@ -486,12 +489,13 @@ DISCOVERY_METHODS = {
 def _scrapecreators_get(path, params):
     if not SCRAPECREATORS:
         raise RuntimeError("SCRAPECREATORS_API_KEY missing for native social discovery")
-    r = session.get(
-        "https://api.scrapecreators.com" + path,
-        headers={"x-api-key": SCRAPECREATORS, "Accept": "application/json"},
-        params=params,
-        timeout=45,
-    )
+    request_url = "https://api.scrapecreators.com" + path
+    request_headers = {"x-api-key": SCRAPECREATORS, "Accept": "application/json"}
+    r = session.get(request_url, headers=request_headers, params=params, timeout=45)
+    if getattr(r, "status_code", None) in (429, 500, 502, 503, 504):
+        print(f"SCRAPECREATORS_TRANSIENT_RETRY endpoint={path}; status={r.status_code}; retry=1")
+        time.sleep(2)
+        r = session.get(request_url, headers=request_headers, params=params, timeout=45)
     if r.status_code >= 400:
         detail = (r.text or "").replace("\\n", " ")[:240]
         print(
@@ -640,12 +644,14 @@ def _linkedin_provider_candidates(query):
     """
     if not SCRAPECREATORS:
         raise RuntimeError("SCRAPECREATORS_API_KEY missing for LinkedIn provider search")
-    response = session.get(
-        "https://api.scrapecreators.com/v1/linkedin/search/posts",
-        headers={"x-api-key": SCRAPECREATORS, "Accept": "application/json"},
-        params={"query": query},
-        timeout=20,
-    )
+    request_url = "https://api.scrapecreators.com/v1/linkedin/search/posts"
+    request_headers = {"x-api-key": SCRAPECREATORS, "Accept": "application/json"}
+    request_params = {"query": query}
+    response = session.get(request_url, headers=request_headers, params=request_params, timeout=20)
+    if getattr(response, "status_code", None) in (429, 500, 502, 503, 504):
+        print(f"SCRAPECREATORS_TRANSIENT_RETRY endpoint=/v1/linkedin/search/posts; status={response.status_code}; retry=1")
+        time.sleep(2)
+        response = session.get(request_url, headers=request_headers, params=request_params, timeout=20)
     # ScrapeCreators currently uses HTTP 404 for some valid searches with no
     # matching public posts. Treat that as an empty result, not a broken endpoint.
     if getattr(response, "status_code", None) == 404:
@@ -915,6 +921,10 @@ def native_candidates(platform, query):
             try:
                 out.extend(_linkedin_provider_candidates(query))
             except Exception as exc:
+                DISCOVERY_ERRORS.append({
+                    "platform": "linkedin", "provider": "ScrapeCreators",
+                    "error_type": type(exc).__name__, "error": str(exc)[:500],
+                })
                 print(f"ScrapeCreators LinkedIn native search failed: {type(exc).__name__}: {exc}")
         if APIFY:
             try:
@@ -924,6 +934,10 @@ def native_candidates(platform, query):
                         seen.add(url)
                         out.append(item)
             except Exception as exc:
+                DISCOVERY_ERRORS.append({
+                    "platform": "linkedin", "provider": "Apify",
+                    "error_type": type(exc).__name__, "error": str(exc)[:500],
+                })
                 print(f"Apify LinkedIn native search failed: {type(exc).__name__}: {exc}")
         if not out:
             print("LinkedIn native search returned no candidates; no generic web fallback will be used.")
@@ -941,17 +955,14 @@ def personal_profile_candidate_score(result, url):
         val(result.get("location")), url
     ]).lower()
     product_hits = sum(1 for term in PRODUCT_TERMS if term and term in text)
-    if not product_hits:
-        return 0
     role_text = " ".join([
         val(result.get("title")), val(result.get("headline")),
         val(result.get("current_company"))
     ]).lower()
     role_hits = sum(1 for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS if term in role_text)
     market_hits = sum(1 for term in MARKET_SIGNALS if term in text)
-    # Provider search was already issued with the selected product and target market.
-    # Do not discard a public professional profile solely because the snippet omits
-    # the location or job-title vocabulary; use those signals to rank instead.
+    # Search is already product/market scoped. Public snippets often omit these
+    # details, so retain the profile and rank it using whichever signals are present.
     return 8 + product_hits * 4 + role_hits * 2 + market_hits
 
 
@@ -991,12 +1002,9 @@ def social_candidate_score(platform, result, url):
     product_hits = sum(1 for term in PRODUCT_TERMS if term and term in text)
     buyer_hits = sum(1 for term in BUYER_TYPE_TERMS if term and term in text)
     market_hits = sum(1 for term in MARKET_SIGNALS if term and term in text)
-    # Product fit is the relevance anchor. Market and buyer signals improve ranking,
-    # but neither must appear in the short provider snippet because the native query
-    # itself already includes both the configured market and product/buyer vocabulary.
-    if not product_hits:
-        return 0
-    return product_hits * 5 + buyer_hits * 2 + market_hits
+    # The provider-native query is product/market scoped. Missing terms in a short
+    # snippet are not a reason to discard a valid public company page.
+    return 1 + product_hits * 5 + buyer_hits * 2 + market_hits
 
 
 def pace_cloudflare_request():
@@ -1314,6 +1322,10 @@ def discover(p):
             results = native_candidates(p, query)
         except Exception as exc:
             last_error = exc
+            DISCOVERY_ERRORS.append({
+                "platform": p, "method": DISCOVERY_METHODS[p],
+                "error_type": type(exc).__name__, "error": str(exc)[:500],
+            })
             print(
                 f"Native social discovery failed: platform={p}; "
                 f"method={DISCOVERY_METHODS[p]}; error={type(exc).__name__}: {exc}"
@@ -1934,8 +1946,11 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "discovered_candidates_total": discovered,
         "discovered_candidates_by_platform": DISCOVERY_COUNTS,
         "new_qualified_leads_added": added,
+        "existing_social_rows_read": SHEET_LEADS_ROWS_READ,
+        "existing_personal_profile_rows_read": SHEET_PERSONAL_ROWS_READ,
         "existing_social_records_checked": len(EXISTING_SOCIAL_KEYS),
         "existing_personal_profiles_checked": len(EXISTING_PERSONAL_KEYS),
+        "discovery_errors": DISCOVERY_ERRORS,
         "duplicates_skipped_before_enrichment": DUPLICATE_PREFILTER_SKIPPED,
         "cloudflare_primary_discovery": False,
         "collection_scope": "linkedin_facebook_only",
@@ -1952,7 +1967,8 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
             1 for item in PROFILE_AUDIT if item.get("outcome") == "personal_account_saved"
         ),
         "notes": [
-            "Public LinkedIn company pages, qualifying public LinkedIn personal profiles, and public Facebook pages only.",
+            "Public LinkedIn company pages, public LinkedIn personal profiles returned by product-scoped searches, and public Facebook pages only.",
+            "Product/market/buyer signals rank candidates; incomplete snippets do not block collection.",
             "HTTP success does not guarantee usable public profile fields.",
             "Outbound email and WhatsApp delivery are controlled by the workflow outreach_enabled input.",
             "Personal LinkedIn rows contain only public profile identity and provenance; no contact fields are stored."
@@ -2484,6 +2500,7 @@ def run_product_web_collection():
 
 
 def main():
+    global SHEET_LEADS_ROWS_READ, SHEET_PERSONAL_ROWS_READ
     # This repository is intentionally social-only. Fail closed if an old
     # workflow or environment variable attempts to invoke the former web mode.
     if COLLECTION_MODE != "social":
@@ -2497,6 +2514,7 @@ def main():
     # provider calls if its endpoint/token are not configured.
     store = GoogleSheetStore.from_env()
     rows = store.read_table("Leads")
+    SHEET_LEADS_ROWS_READ = len(rows)
     fields = list(FIELDS)
     for stored in rows:
         for field in stored.keys():
@@ -2511,6 +2529,7 @@ def main():
         writer.writerows(rows)
 
     profile_rows = store.read_table("Personal Profiles")
+    SHEET_PERSONAL_ROWS_READ = len(profile_rows)
     with PERSONAL_PROFILES.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=PERSONAL_PROFILE_FIELDS, extrasaction="ignore")
         writer.writeheader()
@@ -2578,8 +2597,8 @@ def main():
         print("No new Facebook or LinkedIn candidates found after checking stored records")
         write_run_report(
             platforms_to_collect, 0, 0,
-            {"ScrapeCreators": 0, "Apify": 0, "failed": 0},
-            "no_new_candidates"
+            {"ScrapeCreators": 0, "Apify": 0, "failed": len(DISCOVERY_ERRORS)},
+            "provider_errors" if DISCOVERY_ERRORS else "no_new_candidates"
         )
         print(
             f"PERSONAL_PROFILE_SUMMARY discovered=0; new_account_only_records=0; "
@@ -2618,7 +2637,7 @@ def main():
     provider_counts = {
         "ScrapeCreators": 0,
         "Apify": 0,
-        "failed": 0
+        "failed": len(DISCOVERY_ERRORS)
     }
 
     personal_profiles_added = 0
@@ -2710,14 +2729,11 @@ def main():
         }, ensure_ascii=False))
 
         relevant = relevant_social_profile(p, surl or url, company, web, loc, bio)
-        strict_relevance = os.getenv("SOCIAL_STRICT_RELEVANCE", "false").strip().lower() in ("1", "true", "yes", "on")
-        if not relevant and strict_relevance:
-            profile_audit_row["outcome"] = "rejected_not_relevant"
-            print(f"Rejected low-confidence social result: platform={p}; discovered_url={url}; returned_profile_url={returned_url or 'NOT_RETURNED'}")
-            continue
+        # Observation-first collection: record relevance for review, but do not
+        # discard a candidate because the provider returned incomplete public metadata.
         profile_audit_row["outcome"] = "accepted_relevant" if relevant else "retained_observation_mode"
         if not relevant:
-            print(f"SOCIAL_RELEVANCE_OBSERVATION platform={p}; strict_filter=disabled; candidate_retained_for_observation; url={url}")
+            print(f"SOCIAL_RELEVANCE_OBSERVATION platform={p}; strict_filter=removed; candidate_retained_for_observation; url={url}")
 
         if (p, surl.rstrip("/")) in seen:
             continue
