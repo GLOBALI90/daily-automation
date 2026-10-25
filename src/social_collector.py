@@ -775,16 +775,30 @@ def _apify_linkedin_company_candidates(query):
 
 
 def native_candidates(platform, query):
+    """Use only provider endpoints dedicated to the requested social network."""
     if platform == "facebook":
-        # Facebook discovery is handled by Cloudflare, with Exa as a bounded backup.
-        return []
+        return _facebook_native_candidates(query)
     if platform == "linkedin":
-        # LinkedIn company discovery runs only through Apify. Fail closed when
-        # the token is missing; do not silently fall back to retired providers.
-        if not APIFY:
-            print("APIFY_LINKEDIN_SEARCH skipped: APIFY_API_TOKEN missing")
-            return []
-        return _apify_linkedin_company_candidates(query)
+        out = []
+        seen = set()
+        # First use LinkedIn-specific public post search, then LinkedIn company search.
+        if SCRAPECREATORS:
+            try:
+                out.extend(_linkedin_provider_candidates(query))
+            except Exception as exc:
+                print(f"ScrapeCreators LinkedIn native search failed: {type(exc).__name__}: {exc}")
+        if APIFY:
+            try:
+                for item in _apify_linkedin_company_candidates(query):
+                    url = val(item.get("url")).rstrip("/")
+                    if url and url not in seen:
+                        seen.add(url)
+                        out.append(item)
+            except Exception as exc:
+                print(f"Apify LinkedIn native search failed: {type(exc).__name__}: {exc}")
+        if not out:
+            print("LinkedIn native search returned no candidates; no generic web fallback will be used.")
+        return out
     raise ValueError(f"Unsupported social platform: {platform}")
 
 
