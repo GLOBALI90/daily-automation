@@ -866,7 +866,7 @@ def _apify_linkedin_company_candidates(query):
         "searchQuery": query,
         "maxItems": min(15, MAX_ITEMS * 3),
         "takePages": 1,
-        "locations": ["China"],
+        "locations": [TARGET_MARKET],
         "maxTotalChargeUsd": 0.10,
     })
     out = []
@@ -931,8 +931,8 @@ def native_candidates(platform, query):
     raise ValueError(f"Unsupported social platform: {platform}")
 
 
-def personal_profile_candidate_score(result, url):
-    """Rank relevant public LinkedIn people without requiring every signal in one snippet."""
+def personal_profile_candidate_score(result, url, query=""):
+    """Rank public LinkedIn people from product-targeted native searches."""
     if not urlparse(url).path.lower().startswith("/in/"):
         return 0
     text = " ".join([
@@ -941,18 +941,19 @@ def personal_profile_candidate_score(result, url):
         val(result.get("location")), url
     ]).lower()
     product_hits = sum(1 for term in PRODUCT_TERMS if term and term in text)
-    if not product_hits:
-        return 0
     role_text = " ".join([
         val(result.get("title")), val(result.get("headline")),
         val(result.get("current_company"))
     ]).lower()
     role_hits = sum(1 for term in BUYER_ROLE_TERMS + DECISION_MAKER_TERMS if term in role_text)
     market_hits = sum(1 for term in MARKET_SIGNALS if term in text)
-    # Provider search was already issued with the selected product and target market.
-    # Do not discard a public professional profile solely because the snippet omits
-    # the location or job-title vocabulary; use those signals to rank instead.
-    return 8 + product_hits * 4 + role_hits * 2 + market_hits
+    # Native query is already built around the chosen product/market. Sparse
+    # snippets lower rank but should not automatically discard public profiles.
+    query_context = val(query).lower()
+    query_is_product_targeted = any(term and term in query_context for term in PRODUCT_TERMS)
+    if not product_hits and not query_is_product_targeted:
+        return 0
+    return 4 + product_hits * 4 + role_hits * 2 + market_hits
 
 
 def save_personal_profile(platform, url, public_name=""):
@@ -982,12 +983,12 @@ def save_personal_profile(platform, url, public_name=""):
     return True
 
 
-def social_candidate_score(platform, result, url):
+def social_candidate_score(platform, result, url, query=""):
     title = val(result.get("title"))
     snippet = val(result.get("content") or result.get("snippet") or result.get("description"))
     text = " ".join([title, snippet, url]).lower()
     if platform == "linkedin" and urlparse(url).path.lower().startswith("/in/"):
-        return personal_profile_candidate_score(result, url)
+        return personal_profile_candidate_score(result, url, query)
     product_hits = sum(1 for term in PRODUCT_TERMS if term and term in text)
     buyer_hits = sum(1 for term in BUYER_TYPE_TERMS if term and term in text)
     market_hits = sum(1 for term in MARKET_SIGNALS if term and term in text)
@@ -995,7 +996,16 @@ def social_candidate_score(platform, result, url):
     # but neither must appear in the short provider snippet because the native query
     # itself already includes both the configured market and product/buyer vocabulary.
     if not product_hits:
-        return 0
+        # Provider snippets are often sparse. Since each native query is built
+        # from the selected product and market, keep credible named pages at a
+        # lower score instead of hard-dropping them for missing snippet keywords.
+        title = val(result.get("title")).strip().lower()
+        generic_titles = {"", "facebook", "linkedin", "company", "page", "unknown", "n/a", "none"}
+        query_context = val(query).lower()
+        query_is_product_targeted = any(term and term in query_context for term in PRODUCT_TERMS)
+        if title in generic_titles or len(title) < 3 or not query_is_product_targeted:
+            return 0
+        return 2 + buyer_hits * 2 + market_hits
     return product_hits * 5 + buyer_hits * 2 + market_hits
 
 
@@ -1334,7 +1344,7 @@ def discover(p):
                 DUPLICATE_PREFILTER_SKIPPED += 1
                 print(f"Skipping previously stored social candidate: platform={p}; url={url}")
                 continue
-            score = social_candidate_score(p, item, url)
+            score = social_candidate_score(p, item, url, query)
             if not score:
                 continue
             is_personal = p == "linkedin" and urlparse(url).path.lower().startswith("/in/")
@@ -1557,13 +1567,18 @@ def provider_chain(p, url):
                     company, web, loc, contact, email, phone, bio, followers, verified
                 )
                 has_substantive_detail = any((web, loc, email, phone, bio))
-                if not company or len(extracted) < 2 or not has_substantive_detail:
-                    errors.append(f"{name}:response_without_usable_profile_fields")
+                if not company:
+                    errors.append(f"{name}:response_without_company_or_page_name")
                     print(
-                        f"Social provider response rejected as unusable: {name}; "
+                        f"Social provider response rejected because company/page name is missing: {name}; "
                         f"fields={json.dumps(extracted, ensure_ascii=False)}"
                     )
                     continue
+                if len(extracted) < 2 or not has_substantive_detail:
+                    print(
+                        f"SOCIAL_PROFILE_PARTIAL provider={name}; platform={p}; "
+                        "keeping named public page with sparse fields for later review"
+                    )
                 relevant = relevant_social_profile(
                     p, normalized[9] or url, company, web, loc, bio
                 )
