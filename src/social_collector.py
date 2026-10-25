@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse, quote
 import requests
+from google_sheet_store import GoogleSheetStore
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
@@ -2364,23 +2365,31 @@ def main():
         )
         return
 
-    # Always create the account-only CSV with a stable header, even when no
-    # relevant personal profile is discovered in this run.
-    if not PERSONAL_PROFILES.exists():
-        with PERSONAL_PROFILES.open("w", encoding="utf-8", newline="") as handle:
-            csv.DictWriter(handle, fieldnames=PERSONAL_PROFILE_FIELDS).writeheader()
+    # Google Sheets is the single durable database. Fail closed before any
+    # provider calls if its endpoint/token are not configured.
+    store = GoogleSheetStore.from_env()
+    rows = store.read_table("Leads")
+    fields = list(FIELDS)
+    for stored in rows:
+        for field in stored.keys():
+            if field not in fields:
+                fields.append(field)
+
+    # Keep an ephemeral runner-local CSV cache only for downstream compatibility;
+    # it is not committed or uploaded as an artifact.
+    with LEADS.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
+    profile_rows = store.read_table("Personal Profiles")
+    with PERSONAL_PROFILES.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=PERSONAL_PROFILE_FIELDS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(profile_rows)
 
     # Read durable state BEFORE discovery on every run. Known company pages and
     # previously saved personal accounts are excluded before profile enrichment.
-    rows = []
-    fields = []
-    if LEADS.exists():
-        with LEADS.open(encoding="utf-8", newline="") as handle:
-            rows = list(csv.DictReader(handle))
-            fields = list(rows[0].keys()) if rows else []
-    for field in FIELDS:
-        if field not in fields:
-            fields.append(field)
 
     EXISTING_SOCIAL_KEYS.clear()
     for stored in rows:
@@ -2640,6 +2649,19 @@ def main():
         w.writeheader()
         w.writerows(rows)
 
+    # Persist all lead records and account-only profiles to Google Sheets.
+    # The upsert preserves non-empty existing values and avoids duplicate keys.
+    store.upsert_table("Leads", rows, fields, key_column="social_url")
+    with PERSONAL_PROFILES.open(encoding="utf-8", newline="") as handle:
+        profile_rows = list(csv.DictReader(handle))
+    store.upsert_table(
+        "Personal Profiles", profile_rows, PERSONAL_PROFILE_FIELDS,
+        key_column="profile_url"
+    )
+
+    print(
+        "GOOGLE_SHEETS_PERSISTENCE completed=true; tabs=Leads,Personal Profiles; local_csv_is_ephemeral=true"
+    )
     print(
         "SOCIAL_ONLY_PROVIDER_STATUS supported_platforms=linkedin,facebook; "
         "generic_web_search=false; google_maps=false; cloudflare_search=false; "

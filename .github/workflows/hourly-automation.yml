@@ -440,6 +440,8 @@ jobs:
           SOCIAL_PLATFORM: ${{ inputs.social_platform || 'auto' }}
           SOCIAL_MAX_ITEMS: ${{ inputs.social_max_items || '3' }}
           SOCIAL_REQUEST_INTERVAL_SECONDS: '15'
+          GOOGLE_SHEETS_API_URL: ${{ secrets.GOOGLE_SHEETS_API_URL }}
+          GOOGLE_SHEETS_API_TOKEN: ${{ secrets.GOOGLE_SHEETS_API_TOKEN }}
         run: python src/social_collector.py
 
       - name: Automatic qualified product outreach or opt-in social outreach
@@ -455,30 +457,15 @@ jobs:
           WUAPI_ACCOUNT_ID: j57bvn1pvvfe2kg6zadtxxh3618gayex
         run: python src/process_leads.py
 
-      - name: Save results
-        if: ${{ always() && !inputs.validation_only && github.ref == 'refs/heads/main' }}
-        run: |
-          git config user.name "rozhanglobal-automation"
-          git config user.email "actions@users.noreply.github.com"
-          git add data/
-          if ! git diff --cached --quiet; then
-            git commit -m "Save automation collection and outreach results"
-            # Integrate commits that landed on main while this run was collecting.
-            git fetch origin main
-            git rebase origin/main
-            git push origin HEAD:main
-          else
-            echo "No data changes to save."
-          fi
+      - name: Keep lead database in Google Sheets (no CSV commits)
+        if: ${{ always() && !inputs.validation_only }}
+        run: echo "Lead data is persisted in Google Sheets; local CSV files are ephemeral and will not be committed to GitHub."
 
       - name: Upload social and Cloudflare run report
         if: ${{ always() && !inputs.validation_only }}
         uses: actions/upload-artifact@v4
         with:
           name: social-run-report-${{ github.run_id }}
-          path: |
-            data/social_run_report.json
-            data/personal_profiles.csv
-            data/product_leads.csv
+          path: data/social_run_report.json
           if-no-files-found: warn
           retention-days: 14
