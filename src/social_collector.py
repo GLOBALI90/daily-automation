@@ -62,6 +62,8 @@ CLOUDFLARE_AUDIT = []
 PROFILE_AUDIT = []
 DISCOVERY_COUNTS = {}
 DISCOVERY_ERRORS = []
+SHEET_LEADS_ROWS_READ = 0
+SHEET_PERSONAL_ROWS_READ = 0
 CLOUDFLARE_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_AUDIT = []
@@ -824,6 +826,10 @@ def native_candidates(platform, query):
             try:
                 out.extend(_linkedin_provider_candidates(query))
             except Exception as exc:
+                DISCOVERY_ERRORS.append({
+                    "platform": "linkedin", "provider": "ScrapeCreators",
+                    "error_type": type(exc).__name__, "error": str(exc)[:500],
+                })
                 print(f"ScrapeCreators LinkedIn native search failed: {type(exc).__name__}: {exc}")
         if APIFY:
             try:
@@ -833,6 +839,10 @@ def native_candidates(platform, query):
                         seen.add(url)
                         out.append(item)
             except Exception as exc:
+                DISCOVERY_ERRORS.append({
+                    "platform": "linkedin", "provider": "Apify",
+                    "error_type": type(exc).__name__, "error": str(exc)[:500],
+                })
                 print(f"Apify LinkedIn native search failed: {type(exc).__name__}: {exc}")
         if not out:
             print("LinkedIn native search returned no candidates; no generic web fallback will be used.")
