@@ -492,6 +492,23 @@ def extract_country_from_location(location):
     return ""
 
 
+def normalize_country_key(country):
+    """Normalize common dropdown/API variants before comparing country labels."""
+    value = re.sub(r"[^a-z0-9]+", " ", val(country).lower()).strip()
+    aliases = {
+        "turkiye": "turkey", "türkiye": "turkey",
+        "iran islamic republic of": "iran", "islamic republic of iran": "iran",
+        "russian federation": "russia", "united states of america": "united states",
+        "usa": "united states", "us": "united states",
+        "uk": "united kingdom", "great britain": "united kingdom",
+        "uae": "united arab emirates", "viet nam": "vietnam",
+        "korea republic of": "south korea", "korea republic": "south korea",
+        "korea democratic peoples republic of": "north korea",
+        "china pr": "china", "prc": "china",
+    }
+    return aliases.get(value, value)
+
+
 def relevant_social_profile(platform, url, company, website, location, bio):
     """Accept product-relevant public social pages in the configured target market."""
     text = " ".join([url, company, website, location, bio]).lower()
@@ -2819,8 +2836,8 @@ def main():
         market_match = any(signal in relevance_text for signal in MARKET_SIGNALS)
         product_match = any(term in relevance_text for term in PRODUCT_TERMS)
         actual_country = extract_country_from_location(loc)
-        target_country = re.sub(r"[^a-z0-9]+", " ", TARGET_MARKET.lower()).strip()
-        normalized_actual = re.sub(r"[^a-z0-9]+", " ", actual_country.lower()).strip()
+        target_country = normalize_country_key(TARGET_MARKET)
+        normalized_actual = normalize_country_key(actual_country)
         relevant = relevant_social_profile(p, surl or url, company, web, loc, bio)
         # A clearly stated different country is a hard mismatch; missing country
         # evidence remains reviewable so sparse but useful public pages are not lost.
