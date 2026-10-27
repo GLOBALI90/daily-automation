@@ -577,32 +577,78 @@ def _scrapecreators_get(path, params):
 
 
 def _facebook_native_candidates(query):
-    """Search only Facebook's own public page/ad-library index; never use Google."""
+    """Search the provider's Facebook Ad Library company index; no login or access-control bypass."""
     data = _scrapecreators_get(
         "/v1/facebook/adLibrary/search/companies", {"query": query}
     )
-    items = data.get("searchResults") or data.get("results") or []
-    out = []
+
+    # Provider response wrappers have varied; accept documented result containers
+    # without treating arbitrary nested objects as page records.
+    items = []
+    containers = [data]
+    if isinstance(data, dict):
+        for key in ("data", "result", "results", "searchResults", "items"):
+            value = data.get(key)
+            if isinstance(value, (dict, list)):
+                containers.append(value)
+    for container in containers:
+        if isinstance(container, list):
+            items.extend(item for item in container if isinstance(item, dict))
+        elif isinstance(container, dict):
+            for key in ("searchResults", "results", "items", "companies", "pages", "data"):
+                value = container.get(key)
+                if isinstance(value, list):
+                    items.extend(item for item in value if isinstance(item, dict))
+    out, seen = [], set()
     for item in items:
-        if not isinstance(item, dict):
-            continue
-        alias = val(item.get("page_alias") or item.get("pageAlias") or item.get("username"))
-        page_id = val(item.get("page_id") or item.get("pageId") or item.get("id"))
-        url = val(item.get("url") or item.get("page_url") or item.get("page_profile_uri"))
+        page = item.get("page") if isinstance(item.get("page"), dict) else {}
+        company = item.get("company") if isinstance(item.get("company"), dict) else {}
+        alias = val(
+            item.get("page_alias") or item.get("pageAlias") or item.get("username")
+            or page.get("username") or page.get("alias")
+        )
+        page_id = val(
+            item.get("page_id") or item.get("pageId") or item.get("id")
+            or page.get("id") or company.get("page_id")
+        )
+        url = val(
+            item.get("url") or item.get("page_url") or item.get("page_profile_uri")
+            or item.get("pageUrl") or page.get("url") or page.get("link")
+            or company.get("facebook_url")
+        )
         if not url and alias:
             url = f"https://www.facebook.com/{alias}/"
         if not url and page_id:
             url = f"https://www.facebook.com/{page_id}"
-        if not url or not good("facebook", url):
+        url = url.split("#", 1)[0].rstrip("/")
+        if not url or url in seen or not good("facebook", url):
             continue
+        path = urlparse(url).path.lower()
+        if any(part in path for part in (
+            "/posts/", "/photos/", "/videos/", "/reel/", "/watch", "/groups/",
+            "/events/", "/marketplace/", "/login", "/share/"
+        )):
+            continue
+        seen.add(url)
+        title = val(
+            item.get("page_name") or item.get("name") or item.get("title")
+            or page.get("name") or company.get("name") or alias
+        )
+        content = val(
+            item.get("description") or item.get("about") or item.get("category")
+            or item.get("category_name") or page.get("description")
+            or company.get("description")
+        )
         out.append({
             "url": url,
-            "title": val(item.get("page_name") or item.get("name") or alias),
-            "content": val(item.get("description") or item.get("about") or
-                           item.get("category") or item.get("category_name")),
-            "search_provider": "ScrapeCreators Facebook Page Search",
+            "title": title,
+            "content": content,
+            "search_provider": "ScrapeCreators Facebook Ad Library Company Search",
         })
-    print(f"Facebook native page search: candidates={len(out)}; web_search_used=false")
+    print(
+        f"FACEBOOK_NATIVE_ADLIBRARY platform=facebook; raw_results={len(items)}; "
+        f"usable_public_pages={len(out)}; web_search_used=false"
+    )
     return out
 
 
@@ -1301,10 +1347,23 @@ def composio_search_candidates(platform, query):
     COMPOSIO_CALLS_THIS_RUN += 1
 
     domain_filter = "linkedin.com/company" if platform == "linkedin" else "facebook.com"
-    search_query = (
-        f'site:{domain_filter} "{PRODUCT_NAME}" "{TARGET_MARKET}" '
-        f'({BUYER_TYPES}) company website contact'
-    )
+    if platform == "facebook":
+        # Keep the query broad enough for indexed public Page names and bios.
+        # Avoid requiring an exact product-name phrase plus a country phrase,
+        # which commonly eliminates relevant regional distributors.
+        product_terms = " OR ".join(
+            f'"{term}"' for term in _search_phrases[:5] if val(term)
+        ) or f'"{PRODUCT_NAME}"'
+        search_query = (
+            f'site:{domain_filter} ({product_terms}) '
+            f'("{TARGET_MARKET}" OR "{TARGET_MARKET.lower()}") '
+            '(supplier OR distributor OR importer OR manufacturer OR factory OR company)'
+        )
+    else:
+        search_query = (
+            f'site:{domain_filter} "{PRODUCT_NAME}" "{TARGET_MARKET}" '
+            f'({BUYER_TYPES}) company website contact'
+        )
     # Resolve the actual REST connected-account ID and its owning user.
     # The MCP alias in GitHub Secrets is not necessarily the REST account ID.
     account = _resolve_composio_firecrawl_account()
