@@ -65,6 +65,8 @@ DISCOVERY_ERRORS = []
 CLOUDFLARE_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_AUDIT = []
+COMPOSIO_CALLS_THIS_RUN = 0
+MAX_COMPOSIO_CALLS_PER_RUN = 2
 COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
 FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "").strip()
 COLLECTION_MODE = os.getenv("COLLECTION_MODE", "social").strip().lower()
@@ -133,7 +135,9 @@ FIELDS = [
     "search_query", "social_url", "platform", "username", "followers",
     "verified", "social_bio", "source_provider", "discovered_url",
     "profile_url_submitted", "profile_url_returned", "profile_fetch_status",
-    "profile_data_fields", "discovery_method"
+    "profile_data_fields", "discovery_method",
+    "target_market", "company_location", "market_match_status",
+    "product_match_status", "contact_extraction_source"
 ]
 
 session = requests.Session()
@@ -1211,11 +1215,17 @@ def _resolve_composio_firecrawl_account():
 
 
 def composio_search_candidates(platform, query):
-    """Primary discovery via Composio's Firecrawl Search tool."""
-    if not COMPOSIO_API_KEY:
-        raise RuntimeError("COMPOSIO_API_KEY missing")
+    """Bounded fallback discovery through Composio, restricted to the two approved social networks."""
+    global COMPOSIO_CALLS_THIS_RUN
     if platform not in ("linkedin", "facebook"):
         return []
+    if not COMPOSIO_API_KEY:
+        print(f"COMPOSIO_FALLBACK_SKIPPED platform={platform}; reason=api_key_not_configured")
+        return []
+    if COMPOSIO_CALLS_THIS_RUN >= MAX_COMPOSIO_CALLS_PER_RUN:
+        print(f"COMPOSIO_FALLBACK_SKIPPED platform={platform}; reason=per_run_cap_reached")
+        return []
+    COMPOSIO_CALLS_THIS_RUN += 1
 
     domain_filter = "linkedin.com/company" if platform == "linkedin" else "facebook.com"
     search_query = (
@@ -1331,6 +1341,33 @@ def discover(p):
             candidate = (score, url, query, DISCOVERY_METHODS[p])
             if current is None or score > current[0]:
                 target[url] = candidate
+
+    # Native provider results are free-first. Only use one Composio search for this
+    # platform when native discovery did not fill the company-lead cap.
+    if len(ranked_by_url) < MAX_ITEMS and COMPOSIO_API_KEY:
+        try:
+            fallback_results = composio_search_candidates(p, " ".join(NATIVE_QUERIES[p]))
+            for item in fallback_results:
+                url = val(item.get("url")).rstrip("/")
+                if not url or not good(p, url) or is_existing_candidate(p, url):
+                    if url and is_existing_candidate(p, url):
+                        DUPLICATE_PREFILTER_SKIPPED += 1
+                    continue
+                SOCIAL_DISCOVERY_RESULTS[(p, url.rstrip("/"))] = item
+                score = social_candidate_score(p, item, url)
+                if not score:
+                    continue
+                target = personal_by_url if p == "linkedin" and urlparse(url).path.lower().startswith("/in/") else ranked_by_url
+                current = target.get(url)
+                candidate = (score, url, "Composio fallback: " + " ".join(NATIVE_QUERIES[p]), "composio_firecrawl_fallback")
+                if current is None or score > current[0]:
+                    target[url] = candidate
+        except Exception as exc:
+            DISCOVERY_ERRORS.append({
+                "platform": p, "provider": "Composio Firecrawl",
+                "error_type": type(exc).__name__, "error": str(exc)[:500],
+            })
+            print(f"COMPOSIO_FALLBACK_FAILED platform={p}; error={type(exc).__name__}: {exc}")
 
     ranked = sorted(ranked_by_url.values(), key=lambda item: item[0], reverse=True)
     personal_ranked = sorted(personal_by_url.values(), key=lambda item: item[0], reverse=True)
@@ -1629,7 +1666,7 @@ def profile_field_names(company, web, loc, contact, email, phone, bio, followers
 
 
 def extract_public_contacts(text, email="", phone=""):
-    """Extract only visibly published email/phone details from a public profile bio."""
+    """Extract only visibly published contact details from returned public profile fields."""
     source = val(text)
     email_value = val(email)
     if not re.search(r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$", email_value, re.I):
@@ -1651,7 +1688,7 @@ def extract_public_contacts(text, email="", phone=""):
     phone_value = val(phone)
     if not phone_value:
         phone_match = re.search(
-            r"(?i)(?:phone|telephone|tel|mobile|contact number)\s*[:：\-]?\s*(\+?\d[\d ().\-]{7,}\d)",
+            r"(?i)(?:phone|telephone|tel|mobile|mobile number|contact number|call us|office number)\s*[:：\-]?\s*(\+?\d[\d ().\-]{7,}\d)",
             source,
         )
         phone_value = re.sub(r"\s+", " ", phone_match.group(1)).strip() if phone_match else ""
@@ -1733,14 +1770,32 @@ def normalize_cloudflare_profile(platform, data, fallback):
         "public_email", "contactEmail", "contact_email"
     ))
     phone = _first_profile_value(nodes, (
-        "phone", "phoneNumber", "phone_number", "contactPhone", "contact_phone"
+        "phone", "phoneNumber", "phone_number", "contactPhone", "contact_phone",
+        "telephone", "telephoneNumber", "mobile", "mobilePhone", "mobile_phone",
+        "publicPhone", "public_phone", "businessPhone", "business_phone"
     ))
-    bio = _first_profile_value(nodes, (
-        "description", "about", "intro", "bio", "biography", "pageIntro",
-        "page_intro", "headline", "category", "services", "content", "text",
-        "markdown", "pageContent", "page_content", "rawText", "raw_text",
-        "summary", "snippet"
+    whatsapp = _first_profile_value(nodes, (
+        "whatsapp", "whatsApp", "whatsappNumber", "whatsapp_number",
+        "whatsAppNumber", "whatsappPhone", "whatsapp_phone"
     ))
+    bio_parts = []
+    for node in nodes:
+        for key in (
+            "description", "about", "intro", "bio", "biography", "pageIntro",
+            "page_intro", "headline", "category", "services", "content", "text",
+            "markdown", "pageContent", "page_content", "rawText", "raw_text",
+            "summary", "snippet", "contact", "contactInfo", "contact_info"
+        ):
+            value = val(node.get(key))
+            if value and value not in bio_parts:
+                bio_parts.append(value)
+    if email:
+        bio_parts.append("Email: " + email)
+    if phone:
+        bio_parts.append("Phone: " + phone)
+    if whatsapp:
+        bio_parts.append("WhatsApp: " + whatsapp)
+    bio = " | ".join(bio_parts)
     followers = _first_profile_value(nodes, (
         "followersCount", "followers_count", "followerCount", "follower_count",
         "followers", "followersText", "likesCount", "likes_count", "fan_count",
@@ -1792,11 +1847,19 @@ def normalize_provider(p, provider, data, fallback):
                         x.get("specialties"), x.get("slogan")
                     ] if val(v)
                 )
+                email = val(x.get("email") or x.get("publicEmail") or x.get("public_email") or x.get("contactEmail"))
+                phone = val(x.get("phone") or x.get("phoneNumber") or x.get("phone_number") or x.get("telephone") or x.get("mobile") or x.get("contactPhone"))
+                whatsapp = val(x.get("whatsapp") or x.get("whatsApp") or x.get("whatsappNumber") or x.get("whatsapp_number"))
+                contact_evidence = [bio]
+                if email: contact_evidence.append("Email: " + email)
+                if phone: contact_evidence.append("Phone: " + phone)
+                if whatsapp: contact_evidence.append("WhatsApp: " + whatsapp)
+                bio = " | ".join(value for value in contact_evidence if value)
                 return (
-                    val(x.get("name") or x.get("companyName")), 
+                    val(x.get("name") or x.get("companyName")),
                     val(x.get("website") or x.get("websiteUrl")), val(location),
-                    val(x.get("name") or x.get("companyName")), 
-                    val(x.get("email")), val(x.get("phone")), bio,
+                    val(x.get("name") or x.get("companyName")),
+                    email, phone, bio,
                     val(x.get("followers") or x.get("followerCount") or x.get("followersCount")),
                     val(x.get("verified")), val(x.get("url") or x.get("linkedinUrl")) or fallback
                 )
@@ -1806,11 +1869,17 @@ def normalize_provider(p, provider, data, fallback):
                 val(x.get("followers") or x.get("followerCount")), val(x.get("verified")), fallback
             )
         if p == "facebook":
+            email = val(x.get("email") or x.get("publicEmail") or x.get("public_email") or x.get("contactEmail"))
+            phone = val(x.get("phone") or x.get("phoneNumber") or x.get("phone_number") or x.get("telephone") or x.get("mobile") or x.get("contactPhone"))
+            whatsapp = val(x.get("whatsapp") or x.get("whatsApp") or x.get("whatsappNumber") or x.get("whatsapp_number"))
+            bio_parts = [val(x.get("description") or x.get("services") or x.get("about"))]
+            if email: bio_parts.append("Email: " + email)
+            if phone: bio_parts.append("Phone: " + phone)
+            if whatsapp: bio_parts.append("WhatsApp: " + whatsapp)
             return (
-                val(x.get("name")), val(x.get("website")), val(x.get("address")),
-                val(x.get("name")), val(x.get("email")), val(x.get("phone")),
-                val(x.get("description") or x.get("services")),
-                val(x.get("followerCount") or x.get("likeCount")),
+                val(x.get("name")), val(x.get("website")), val(x.get("address") or x.get("location")),
+                val(x.get("name")), email, phone, " | ".join(v for v in bio_parts if v),
+                val(x.get("followerCount") or x.get("likeCount") or x.get("followersCount")),
                 val(x.get("verified")), fallback
             )
         legacy = x.get("legacy") or {}
@@ -1914,6 +1983,8 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "duplicates_skipped_before_enrichment": DUPLICATE_PREFILTER_SKIPPED,
         "cloudflare_primary_discovery": False,
         "collection_scope": "linkedin_facebook_only",
+        "composio_calls_used": COMPOSIO_CALLS_THIS_RUN,
+        "composio_call_cap": MAX_COMPOSIO_CALLS_PER_RUN,
         "generic_web_search_enabled": False,
         "google_maps_enabled": False,
         "provider_counts": provider_counts,
@@ -1929,6 +2000,9 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         ),
         "notes": [
             "Public LinkedIn company pages, qualifying public LinkedIn personal profiles, and public Facebook pages only.",
+            "Native provider discovery runs first; Composio Firecrawl is a maximum-two-call fallback limited to LinkedIn/Facebook URLs.",
+            "country remains the legacy target-market label for downstream compatibility; target_market and company_location separately expose target and observed location.",
+            "market_match_status and product_match_status are evidence labels; needs_review means the public profile did not prove the match.",
             "HTTP success does not guarantee usable public profile fields.",
             "Outbound email and WhatsApp delivery are controlled by the workflow outreach_enabled input.",
             "Personal LinkedIn rows contain only public profile identity and provenance; no contact fields are stored."
@@ -2685,11 +2759,22 @@ def main():
             "returned_url_present": bool(returned_url)
         }, ensure_ascii=False))
 
+        relevance_text = " ".join([company, web, loc, bio, surl or url]).lower()
+        market_match = any(signal in relevance_text for signal in MARKET_SIGNALS)
+        product_match = any(term in relevance_text for term in PRODUCT_TERMS)
         relevant = relevant_social_profile(p, surl or url, company, web, loc, bio)
-        # Relevance is recorded for review, not used as a hard collection gate.
+        # Do not silently claim a match when evidence is absent. Keep sparse public
+        # records for review, but explicitly label market/product evidence quality.
+        market_match_status = "matched" if market_match else "needs_review"
+        product_match_status = "matched" if product_match else "needs_review"
         profile_audit_row["outcome"] = "accepted_relevant" if relevant else "retained_observation_mode"
+        profile_audit_row["market_match_status"] = market_match_status
+        profile_audit_row["product_match_status"] = product_match_status
         if not relevant:
-            print(f"SOCIAL_RELEVANCE_OBSERVATION platform={p}; strict_filter=disabled; candidate_retained_for_observation; url={url}")
+            print(
+                f"SOCIAL_RELEVANCE_OBSERVATION platform={p}; "
+                f"market_match={market_match_status}; product_match={product_match_status}; url={url}"
+            )
 
         if (p, surl.rstrip("/")) in seen:
             continue
@@ -2713,7 +2798,17 @@ def main():
         row.update({
             "company_name": company,
             "website": web,
+            # Keep the legacy country field stable for downstream compatibility.
+            # New explicit columns distinguish the selected target from observed location.
             "country": TARGET_MARKET,
+            "target_market": TARGET_MARKET,
+            "company_location": loc,
+            "market_match_status": market_match_status,
+            "product_match_status": product_match_status,
+            "contact_extraction_source": (
+                "provider_structured_fields_and_public_profile_text"
+                if (email or phone or whatsapp) else "no_public_contact_found"
+            ),
             "industry": inferred_industry,
             "buyer_type": BUYER_TYPES,
             "product_interest": product_labels.get(inferred_industry, inferred_industry),
@@ -2772,7 +2867,7 @@ def main():
     print(
         "SOCIAL_ONLY_PROVIDER_STATUS supported_platforms=linkedin,facebook; "
         "generic_web_search=false; google_maps=false; cloudflare_search=false; "
-        "firecrawl=false; exa=false; composio_firecrawl=false"
+        f"firecrawl_fallback=composio_only; composio_calls={COMPOSIO_CALLS_THIS_RUN}/{MAX_COMPOSIO_CALLS_PER_RUN}; exa=false"
     )
     print(
         f"Social collection: platforms={','.join(platforms_to_collect)}; "
