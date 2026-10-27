@@ -436,6 +436,62 @@ def infer_social_industry(company, website, location, bio):
     return ""
 
 
+def extract_country_from_location(location):
+    """Return a country only when its name is explicitly present in public location text."""
+    text = re.sub(r"[^a-z0-9]+", " ", val(location).lower()).strip()
+    if not text:
+        return ""
+    aliases = {
+        "Afghanistan": ("afghanistan", "afghan"),
+        "Pakistan": ("pakistan", "pakistani"),
+        "Nepal": ("nepal", "nepali"),
+        "Turkmenistan": ("turkmenistan", "turkmen"),
+        "China": ("china", "chinese", "prc"),
+        "India": ("india", "indian"),
+        "Iran": ("iran", "iranian"),
+        "Turkey": ("turkey", "turkish", "türkiye"),
+        "United Arab Emirates": ("united arab emirates", "uae", "dubai", "abu dhabi"),
+        "Saudi Arabia": ("saudi arabia", "saudi"),
+        "United States": ("united states", "usa", "u s a", "american"),
+        "United Kingdom": ("united kingdom", "uk", "britain", "england", "scotland", "wales"),
+        "Germany": ("germany", "german"),
+        "France": ("france", "french"),
+        "Italy": ("italy", "italian"),
+        "Spain": ("spain", "spanish"),
+        "Russia": ("russia", "russian"),
+        "Bangladesh": ("bangladesh", "bangladeshi"),
+        "Indonesia": ("indonesia", "indonesian"),
+        "Malaysia": ("malaysia", "malaysian"),
+        "Singapore": ("singapore", "singaporean"),
+        "Thailand": ("thailand", "thai"),
+        "Vietnam": ("vietnam", "vietnamese"),
+        "Japan": ("japan", "japanese"),
+        "South Korea": ("south korea", "korea republic"),
+        "Australia": ("australia", "australian"),
+        "Canada": ("canada", "canadian"),
+        "Netherlands": ("netherlands", "dutch"),
+        "Belgium": ("belgium", "belgian"),
+        "Brazil": ("brazil", "brazilian"),
+        "Egypt": ("egypt", "egyptian"),
+        "South Africa": ("south africa", "south african"),
+        "Nigeria": ("nigeria", "nigerian"),
+        "Qatar": ("qatar", "qatari"),
+        "Oman": ("oman", "omani"),
+        "Iraq": ("iraq", "iraqi"),
+        "Ukraine": ("ukraine", "ukrainian"),
+        "Poland": ("poland", "polish"),
+        "Switzerland": ("switzerland", "swiss"),
+        "Sweden": ("sweden", "swedish"),
+        "Norway": ("norway", "norwegian"),
+        "New Zealand": ("new zealand", "kiwi"),
+    }
+    for country, names in aliases.items():
+        for name in names:
+            if re.search(r"(?<![a-z0-9])" + re.escape(name) + r"(?![a-z0-9])", text):
+                return country
+    return ""
+
+
 def relevant_social_profile(platform, url, company, website, location, bio):
     """Accept product-relevant public social pages in the configured target market."""
     text = " ".join([url, company, website, location, bio]).lower()
@@ -2762,14 +2818,28 @@ def main():
         relevance_text = " ".join([company, web, loc, bio, surl or url]).lower()
         market_match = any(signal in relevance_text for signal in MARKET_SIGNALS)
         product_match = any(term in relevance_text for term in PRODUCT_TERMS)
+        actual_country = extract_country_from_location(loc)
+        target_country = re.sub(r"[^a-z0-9]+", " ", TARGET_MARKET.lower()).strip()
+        normalized_actual = re.sub(r"[^a-z0-9]+", " ", actual_country.lower()).strip()
         relevant = relevant_social_profile(p, surl or url, company, web, loc, bio)
-        # Do not silently claim a match when evidence is absent. Keep sparse public
-        # records for review, but explicitly label market/product evidence quality.
-        market_match_status = "matched" if market_match else "needs_review"
+        # A clearly stated different country is a hard mismatch; missing country
+        # evidence remains reviewable so sparse but useful public pages are not lost.
+        if actual_country:
+            market_match_status = "matched" if normalized_actual == target_country else "mismatch"
+        else:
+            market_match_status = "matched" if market_match else "needs_review"
         product_match_status = "matched" if product_match else "needs_review"
         profile_audit_row["outcome"] = "accepted_relevant" if relevant else "retained_observation_mode"
+        profile_audit_row["actual_country"] = actual_country
         profile_audit_row["market_match_status"] = market_match_status
         profile_audit_row["product_match_status"] = product_match_status
+        if market_match_status == "mismatch":
+            profile_audit_row["outcome"] = "rejected_explicit_non_target_country"
+            print(
+                f"SOCIAL_CANDIDATE_REJECTED platform={p}; reason=explicit_non_target_country; "
+                f"actual_country={actual_country}; target_market={TARGET_MARKET}; url={url}"
+            )
+            continue
         if not relevant:
             print(
                 f"SOCIAL_RELEVANCE_OBSERVATION platform={p}; "
@@ -2798,9 +2868,9 @@ def main():
         row.update({
             "company_name": company,
             "website": web,
-            # Keep the legacy country field stable for downstream compatibility.
-            # New explicit columns distinguish the selected target from observed location.
-            "country": TARGET_MARKET,
+            # country is now the explicitly detected company country, never a copy of the target input.
+            # If the public profile does not prove a country, leave it blank.
+            "country": actual_country,
             "target_market": TARGET_MARKET,
             "company_location": loc,
             "market_match_status": market_match_status,
