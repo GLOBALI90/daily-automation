@@ -542,14 +542,16 @@ _query_product_2 = " OR ".join(f'"{term}"' for term in _search_phrases[:3])
 _query_product_3 = " OR ".join(f'"{term}"' for term in _search_phrases[3:6]) or _query_product_2
 NATIVE_QUERIES = {
     "linkedin": [
-        f'{TARGET_MARKET} {_query_product_1} {BUYER_TYPES} company manufacturer buyer',
-        f'{TARGET_MARKET} ({_query_product_2}) supplier importer distributor',
-        f'{TARGET_MARKET} ({_query_product_3}) procurement purchasing sourcing',
+        # Do not require the workflow label (for example "Gasoline / petrol") to
+        # appear verbatim on LinkedIn. Search natural product synonyms first.
+        f'{TARGET_MARKET} ({_query_product_2}) company supplier importer distributor trader',
+        f'{TARGET_MARKET} ({_query_product_3}) company manufacturer refinery procurement',
+        f'{TARGET_MARKET} {PRODUCT_NAME} oil energy trading company buyer',
     ],
     "facebook": [
-        f'{TARGET_MARKET} {_query_product_1} company page',
-        f'{TARGET_MARKET} ({_query_product_2}) supplier manufacturer',
-        f'{TARGET_MARKET} ({_query_product_3}) importer distributor factory',
+        f'{TARGET_MARKET} ({_query_product_2}) company page supplier',
+        f'{TARGET_MARKET} ({_query_product_3}) supplier manufacturer importer',
+        f'{TARGET_MARKET} {PRODUCT_NAME} trading company distributor factory',
     ],
 }
 
@@ -976,7 +978,9 @@ def _apify_linkedin_company_candidates(query):
         "searchQuery": query,
         "maxItems": min(15, MAX_ITEMS * 3),
         "takePages": 1,
-        "locations": [TARGET_MARKET],
+        # Country is already expressed in the search query. The actor's separate
+        # location filter can suppress otherwise valid company-page search results
+        # when the profile has no structured headquarters/location field.
         "maxTotalChargeUsd": 0.10,
     })
     out = []
