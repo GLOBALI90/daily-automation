@@ -65,6 +65,8 @@ DISCOVERY_ERRORS = []
 CLOUDFLARE_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_AUDIT = []
+COMPOSIO_CALLS_THIS_RUN = 0
+MAX_COMPOSIO_CALLS_PER_RUN = 2
 COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
 FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "").strip()
 COLLECTION_MODE = os.getenv("COLLECTION_MODE", "social").strip().lower()
@@ -133,7 +135,9 @@ FIELDS = [
     "search_query", "social_url", "platform", "username", "followers",
     "verified", "social_bio", "source_provider", "discovered_url",
     "profile_url_submitted", "profile_url_returned", "profile_fetch_status",
-    "profile_data_fields", "discovery_method"
+    "profile_data_fields", "discovery_method",
+    "target_market", "company_location", "market_match_status",
+    "product_match_status", "contact_extraction_source"
 ]
 
 session = requests.Session()
@@ -432,6 +436,79 @@ def infer_social_industry(company, website, location, bio):
     return ""
 
 
+def extract_country_from_location(location):
+    """Return a country only when its name is explicitly present in public location text."""
+    text = re.sub(r"[^a-z0-9]+", " ", val(location).lower()).strip()
+    if not text:
+        return ""
+    aliases = {
+        "Afghanistan": ("afghanistan", "afghan"),
+        "Pakistan": ("pakistan", "pakistani"),
+        "Nepal": ("nepal", "nepali"),
+        "Turkmenistan": ("turkmenistan", "turkmen"),
+        "China": ("china", "chinese", "prc"),
+        "India": ("india", "indian"),
+        "Iran": ("iran", "iranian"),
+        "Turkey": ("turkey", "turkish", "türkiye"),
+        "United Arab Emirates": ("united arab emirates", "uae", "dubai", "abu dhabi"),
+        "Saudi Arabia": ("saudi arabia", "saudi"),
+        "United States": ("united states", "usa", "u s a", "american"),
+        "United Kingdom": ("united kingdom", "uk", "britain", "england", "scotland", "wales"),
+        "Germany": ("germany", "german"),
+        "France": ("france", "french"),
+        "Italy": ("italy", "italian"),
+        "Spain": ("spain", "spanish"),
+        "Russia": ("russia", "russian"),
+        "Bangladesh": ("bangladesh", "bangladeshi"),
+        "Indonesia": ("indonesia", "indonesian"),
+        "Malaysia": ("malaysia", "malaysian"),
+        "Singapore": ("singapore", "singaporean"),
+        "Thailand": ("thailand", "thai"),
+        "Vietnam": ("vietnam", "vietnamese"),
+        "Japan": ("japan", "japanese"),
+        "South Korea": ("south korea", "korea republic"),
+        "Australia": ("australia", "australian"),
+        "Canada": ("canada", "canadian"),
+        "Netherlands": ("netherlands", "dutch"),
+        "Belgium": ("belgium", "belgian"),
+        "Brazil": ("brazil", "brazilian"),
+        "Egypt": ("egypt", "egyptian"),
+        "South Africa": ("south africa", "south african"),
+        "Nigeria": ("nigeria", "nigerian"),
+        "Qatar": ("qatar", "qatari"),
+        "Oman": ("oman", "omani"),
+        "Iraq": ("iraq", "iraqi"),
+        "Ukraine": ("ukraine", "ukrainian"),
+        "Poland": ("poland", "polish"),
+        "Switzerland": ("switzerland", "swiss"),
+        "Sweden": ("sweden", "swedish"),
+        "Norway": ("norway", "norwegian"),
+        "New Zealand": ("new zealand", "kiwi"),
+    }
+    for country, names in aliases.items():
+        for name in names:
+            if re.search(r"(?<![a-z0-9])" + re.escape(name) + r"(?![a-z0-9])", text):
+                return country
+    return ""
+
+
+def normalize_country_key(country):
+    """Normalize common dropdown/API variants before comparing country labels."""
+    value = re.sub(r"[^a-z0-9]+", " ", val(country).lower()).strip()
+    aliases = {
+        "turkiye": "turkey", "türkiye": "turkey",
+        "iran islamic republic of": "iran", "islamic republic of iran": "iran",
+        "russian federation": "russia", "united states of america": "united states",
+        "usa": "united states", "us": "united states",
+        "uk": "united kingdom", "great britain": "united kingdom",
+        "uae": "united arab emirates", "viet nam": "vietnam",
+        "korea republic of": "south korea", "korea republic": "south korea",
+        "korea democratic peoples republic of": "north korea",
+        "china pr": "china", "prc": "china",
+    }
+    return aliases.get(value, value)
+
+
 def relevant_social_profile(platform, url, company, website, location, bio):
     """Accept product-relevant public social pages in the configured target market."""
     text = " ".join([url, company, website, location, bio]).lower()
@@ -500,32 +577,78 @@ def _scrapecreators_get(path, params):
 
 
 def _facebook_native_candidates(query):
-    """Search only Facebook's own public page/ad-library index; never use Google."""
+    """Search the provider's Facebook Ad Library company index; no login or access-control bypass."""
     data = _scrapecreators_get(
         "/v1/facebook/adLibrary/search/companies", {"query": query}
     )
-    items = data.get("searchResults") or data.get("results") or []
-    out = []
+
+    # Provider response wrappers have varied; accept documented result containers
+    # without treating arbitrary nested objects as page records.
+    items = []
+    containers = [data]
+    if isinstance(data, dict):
+        for key in ("data", "result", "results", "searchResults", "items"):
+            value = data.get(key)
+            if isinstance(value, (dict, list)):
+                containers.append(value)
+    for container in containers:
+        if isinstance(container, list):
+            items.extend(item for item in container if isinstance(item, dict))
+        elif isinstance(container, dict):
+            for key in ("searchResults", "results", "items", "companies", "pages", "data"):
+                value = container.get(key)
+                if isinstance(value, list):
+                    items.extend(item for item in value if isinstance(item, dict))
+    out, seen = [], set()
     for item in items:
-        if not isinstance(item, dict):
-            continue
-        alias = val(item.get("page_alias") or item.get("pageAlias") or item.get("username"))
-        page_id = val(item.get("page_id") or item.get("pageId") or item.get("id"))
-        url = val(item.get("url") or item.get("page_url") or item.get("page_profile_uri"))
+        page = item.get("page") if isinstance(item.get("page"), dict) else {}
+        company = item.get("company") if isinstance(item.get("company"), dict) else {}
+        alias = val(
+            item.get("page_alias") or item.get("pageAlias") or item.get("username")
+            or page.get("username") or page.get("alias")
+        )
+        page_id = val(
+            item.get("page_id") or item.get("pageId") or item.get("id")
+            or page.get("id") or company.get("page_id")
+        )
+        url = val(
+            item.get("url") or item.get("page_url") or item.get("page_profile_uri")
+            or item.get("pageUrl") or page.get("url") or page.get("link")
+            or company.get("facebook_url")
+        )
         if not url and alias:
             url = f"https://www.facebook.com/{alias}/"
         if not url and page_id:
             url = f"https://www.facebook.com/{page_id}"
-        if not url or not good("facebook", url):
+        url = url.split("#", 1)[0].rstrip("/")
+        if not url or url in seen or not good("facebook", url):
             continue
+        path = urlparse(url).path.lower()
+        if any(part in path for part in (
+            "/posts/", "/photos/", "/videos/", "/reel/", "/watch", "/groups/",
+            "/events/", "/marketplace/", "/login", "/share/"
+        )):
+            continue
+        seen.add(url)
+        title = val(
+            item.get("page_name") or item.get("name") or item.get("title")
+            or page.get("name") or company.get("name") or alias
+        )
+        content = val(
+            item.get("description") or item.get("about") or item.get("category")
+            or item.get("category_name") or page.get("description")
+            or company.get("description")
+        )
         out.append({
             "url": url,
-            "title": val(item.get("page_name") or item.get("name") or alias),
-            "content": val(item.get("description") or item.get("about") or
-                           item.get("category") or item.get("category_name")),
-            "search_provider": "ScrapeCreators Facebook Page Search",
+            "title": title,
+            "content": content,
+            "search_provider": "ScrapeCreators Facebook Ad Library Company Search",
         })
-    print(f"Facebook native page search: candidates={len(out)}; web_search_used=false")
+    print(
+        f"FACEBOOK_NATIVE_ADLIBRARY platform=facebook; raw_results={len(items)}; "
+        f"usable_public_pages={len(out)}; web_search_used=false"
+    )
     return out
 
 
@@ -1211,17 +1334,36 @@ def _resolve_composio_firecrawl_account():
 
 
 def composio_search_candidates(platform, query):
-    """Primary discovery via Composio's Firecrawl Search tool."""
-    if not COMPOSIO_API_KEY:
-        raise RuntimeError("COMPOSIO_API_KEY missing")
+    """Bounded fallback discovery through Composio, restricted to the two approved social networks."""
+    global COMPOSIO_CALLS_THIS_RUN
     if platform not in ("linkedin", "facebook"):
         return []
+    if not COMPOSIO_API_KEY:
+        print(f"COMPOSIO_FALLBACK_SKIPPED platform={platform}; reason=api_key_not_configured")
+        return []
+    if COMPOSIO_CALLS_THIS_RUN >= MAX_COMPOSIO_CALLS_PER_RUN:
+        print(f"COMPOSIO_FALLBACK_SKIPPED platform={platform}; reason=per_run_cap_reached")
+        return []
+    COMPOSIO_CALLS_THIS_RUN += 1
 
     domain_filter = "linkedin.com/company" if platform == "linkedin" else "facebook.com"
-    search_query = (
-        f'site:{domain_filter} "{PRODUCT_NAME}" "{TARGET_MARKET}" '
-        f'({BUYER_TYPES}) company website contact'
-    )
+    if platform == "facebook":
+        # Keep the query broad enough for indexed public Page names and bios.
+        # Avoid requiring an exact product-name phrase plus a country phrase,
+        # which commonly eliminates relevant regional distributors.
+        product_terms = " OR ".join(
+            f'"{term}"' for term in _search_phrases[:5] if val(term)
+        ) or f'"{PRODUCT_NAME}"'
+        search_query = (
+            f'site:{domain_filter} ({product_terms}) '
+            f'("{TARGET_MARKET}" OR "{TARGET_MARKET.lower()}") '
+            '(supplier OR distributor OR importer OR manufacturer OR factory OR company)'
+        )
+    else:
+        search_query = (
+            f'site:{domain_filter} "{PRODUCT_NAME}" "{TARGET_MARKET}" '
+            f'({BUYER_TYPES}) company website contact'
+        )
     # Resolve the actual REST connected-account ID and its owning user.
     # The MCP alias in GitHub Secrets is not necessarily the REST account ID.
     account = _resolve_composio_firecrawl_account()
@@ -1331,6 +1473,33 @@ def discover(p):
             candidate = (score, url, query, DISCOVERY_METHODS[p])
             if current is None or score > current[0]:
                 target[url] = candidate
+
+    # Native provider results are free-first. Only use one Composio search for this
+    # platform when native discovery did not fill the company-lead cap.
+    if len(ranked_by_url) < MAX_ITEMS and COMPOSIO_API_KEY:
+        try:
+            fallback_results = composio_search_candidates(p, " ".join(NATIVE_QUERIES[p]))
+            for item in fallback_results:
+                url = val(item.get("url")).rstrip("/")
+                if not url or not good(p, url) or is_existing_candidate(p, url):
+                    if url and is_existing_candidate(p, url):
+                        DUPLICATE_PREFILTER_SKIPPED += 1
+                    continue
+                SOCIAL_DISCOVERY_RESULTS[(p, url.rstrip("/"))] = item
+                score = social_candidate_score(p, item, url)
+                if not score:
+                    continue
+                target = personal_by_url if p == "linkedin" and urlparse(url).path.lower().startswith("/in/") else ranked_by_url
+                current = target.get(url)
+                candidate = (score, url, "Composio fallback: " + " ".join(NATIVE_QUERIES[p]), "composio_firecrawl_fallback")
+                if current is None or score > current[0]:
+                    target[url] = candidate
+        except Exception as exc:
+            DISCOVERY_ERRORS.append({
+                "platform": p, "provider": "Composio Firecrawl",
+                "error_type": type(exc).__name__, "error": str(exc)[:500],
+            })
+            print(f"COMPOSIO_FALLBACK_FAILED platform={p}; error={type(exc).__name__}: {exc}")
 
     ranked = sorted(ranked_by_url.values(), key=lambda item: item[0], reverse=True)
     personal_ranked = sorted(personal_by_url.values(), key=lambda item: item[0], reverse=True)
@@ -1629,7 +1798,7 @@ def profile_field_names(company, web, loc, contact, email, phone, bio, followers
 
 
 def extract_public_contacts(text, email="", phone=""):
-    """Extract only visibly published email/phone details from a public profile bio."""
+    """Extract only visibly published contact details from returned public profile fields."""
     source = val(text)
     email_value = val(email)
     if not re.search(r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$", email_value, re.I):
@@ -1651,7 +1820,7 @@ def extract_public_contacts(text, email="", phone=""):
     phone_value = val(phone)
     if not phone_value:
         phone_match = re.search(
-            r"(?i)(?:phone|telephone|tel|mobile|contact number)\s*[:：\-]?\s*(\+?\d[\d ().\-]{7,}\d)",
+            r"(?i)(?:phone|telephone|tel|mobile|mobile number|contact number|call us|office number)\s*[:：\-]?\s*(\+?\d[\d ().\-]{7,}\d)",
             source,
         )
         phone_value = re.sub(r"\s+", " ", phone_match.group(1)).strip() if phone_match else ""
@@ -1733,14 +1902,32 @@ def normalize_cloudflare_profile(platform, data, fallback):
         "public_email", "contactEmail", "contact_email"
     ))
     phone = _first_profile_value(nodes, (
-        "phone", "phoneNumber", "phone_number", "contactPhone", "contact_phone"
+        "phone", "phoneNumber", "phone_number", "contactPhone", "contact_phone",
+        "telephone", "telephoneNumber", "mobile", "mobilePhone", "mobile_phone",
+        "publicPhone", "public_phone", "businessPhone", "business_phone"
     ))
-    bio = _first_profile_value(nodes, (
-        "description", "about", "intro", "bio", "biography", "pageIntro",
-        "page_intro", "headline", "category", "services", "content", "text",
-        "markdown", "pageContent", "page_content", "rawText", "raw_text",
-        "summary", "snippet"
+    whatsapp = _first_profile_value(nodes, (
+        "whatsapp", "whatsApp", "whatsappNumber", "whatsapp_number",
+        "whatsAppNumber", "whatsappPhone", "whatsapp_phone"
     ))
+    bio_parts = []
+    for node in nodes:
+        for key in (
+            "description", "about", "intro", "bio", "biography", "pageIntro",
+            "page_intro", "headline", "category", "services", "content", "text",
+            "markdown", "pageContent", "page_content", "rawText", "raw_text",
+            "summary", "snippet", "contact", "contactInfo", "contact_info"
+        ):
+            value = val(node.get(key))
+            if value and value not in bio_parts:
+                bio_parts.append(value)
+    if email:
+        bio_parts.append("Email: " + email)
+    if phone:
+        bio_parts.append("Phone: " + phone)
+    if whatsapp:
+        bio_parts.append("WhatsApp: " + whatsapp)
+    bio = " | ".join(bio_parts)
     followers = _first_profile_value(nodes, (
         "followersCount", "followers_count", "followerCount", "follower_count",
         "followers", "followersText", "likesCount", "likes_count", "fan_count",
@@ -1792,11 +1979,19 @@ def normalize_provider(p, provider, data, fallback):
                         x.get("specialties"), x.get("slogan")
                     ] if val(v)
                 )
+                email = val(x.get("email") or x.get("publicEmail") or x.get("public_email") or x.get("contactEmail"))
+                phone = val(x.get("phone") or x.get("phoneNumber") or x.get("phone_number") or x.get("telephone") or x.get("mobile") or x.get("contactPhone"))
+                whatsapp = val(x.get("whatsapp") or x.get("whatsApp") or x.get("whatsappNumber") or x.get("whatsapp_number"))
+                contact_evidence = [bio]
+                if email: contact_evidence.append("Email: " + email)
+                if phone: contact_evidence.append("Phone: " + phone)
+                if whatsapp: contact_evidence.append("WhatsApp: " + whatsapp)
+                bio = " | ".join(value for value in contact_evidence if value)
                 return (
-                    val(x.get("name") or x.get("companyName")), 
+                    val(x.get("name") or x.get("companyName")),
                     val(x.get("website") or x.get("websiteUrl")), val(location),
-                    val(x.get("name") or x.get("companyName")), 
-                    val(x.get("email")), val(x.get("phone")), bio,
+                    val(x.get("name") or x.get("companyName")),
+                    email, phone, bio,
                     val(x.get("followers") or x.get("followerCount") or x.get("followersCount")),
                     val(x.get("verified")), val(x.get("url") or x.get("linkedinUrl")) or fallback
                 )
@@ -1806,11 +2001,17 @@ def normalize_provider(p, provider, data, fallback):
                 val(x.get("followers") or x.get("followerCount")), val(x.get("verified")), fallback
             )
         if p == "facebook":
+            email = val(x.get("email") or x.get("publicEmail") or x.get("public_email") or x.get("contactEmail"))
+            phone = val(x.get("phone") or x.get("phoneNumber") or x.get("phone_number") or x.get("telephone") or x.get("mobile") or x.get("contactPhone"))
+            whatsapp = val(x.get("whatsapp") or x.get("whatsApp") or x.get("whatsappNumber") or x.get("whatsapp_number"))
+            bio_parts = [val(x.get("description") or x.get("services") or x.get("about"))]
+            if email: bio_parts.append("Email: " + email)
+            if phone: bio_parts.append("Phone: " + phone)
+            if whatsapp: bio_parts.append("WhatsApp: " + whatsapp)
             return (
-                val(x.get("name")), val(x.get("website")), val(x.get("address")),
-                val(x.get("name")), val(x.get("email")), val(x.get("phone")),
-                val(x.get("description") or x.get("services")),
-                val(x.get("followerCount") or x.get("likeCount")),
+                val(x.get("name")), val(x.get("website")), val(x.get("address") or x.get("location")),
+                val(x.get("name")), email, phone, " | ".join(v for v in bio_parts if v),
+                val(x.get("followerCount") or x.get("likeCount") or x.get("followersCount")),
                 val(x.get("verified")), fallback
             )
         legacy = x.get("legacy") or {}
@@ -1914,6 +2115,8 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "duplicates_skipped_before_enrichment": DUPLICATE_PREFILTER_SKIPPED,
         "cloudflare_primary_discovery": False,
         "collection_scope": "linkedin_facebook_only",
+        "composio_calls_used": COMPOSIO_CALLS_THIS_RUN,
+        "composio_call_cap": MAX_COMPOSIO_CALLS_PER_RUN,
         "generic_web_search_enabled": False,
         "google_maps_enabled": False,
         "provider_counts": provider_counts,
@@ -1929,6 +2132,9 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         ),
         "notes": [
             "Public LinkedIn company pages, qualifying public LinkedIn personal profiles, and public Facebook pages only.",
+            "Native provider discovery runs first; Composio Firecrawl is a maximum-two-call fallback limited to LinkedIn/Facebook URLs.",
+            "country remains the legacy target-market label for downstream compatibility; target_market and company_location separately expose target and observed location.",
+            "market_match_status and product_match_status are evidence labels; needs_review means the public profile did not prove the match.",
             "HTTP success does not guarantee usable public profile fields.",
             "Outbound email and WhatsApp delivery are controlled by the workflow outreach_enabled input.",
             "Personal LinkedIn rows contain only public profile identity and provenance; no contact fields are stored."
@@ -2685,11 +2891,36 @@ def main():
             "returned_url_present": bool(returned_url)
         }, ensure_ascii=False))
 
+        relevance_text = " ".join([company, web, loc, bio, surl or url]).lower()
+        market_match = any(signal in relevance_text for signal in MARKET_SIGNALS)
+        product_match = any(term in relevance_text for term in PRODUCT_TERMS)
+        actual_country = extract_country_from_location(loc)
+        target_country = normalize_country_key(TARGET_MARKET)
+        normalized_actual = normalize_country_key(actual_country)
         relevant = relevant_social_profile(p, surl or url, company, web, loc, bio)
-        # Relevance is recorded for review, not used as a hard collection gate.
+        # A clearly stated different country is a hard mismatch; missing country
+        # evidence remains reviewable so sparse but useful public pages are not lost.
+        if actual_country:
+            market_match_status = "matched" if normalized_actual == target_country else "mismatch"
+        else:
+            market_match_status = "matched" if market_match else "needs_review"
+        product_match_status = "matched" if product_match else "needs_review"
         profile_audit_row["outcome"] = "accepted_relevant" if relevant else "retained_observation_mode"
+        profile_audit_row["actual_country"] = actual_country
+        profile_audit_row["market_match_status"] = market_match_status
+        profile_audit_row["product_match_status"] = product_match_status
+        if market_match_status == "mismatch":
+            profile_audit_row["outcome"] = "rejected_explicit_non_target_country"
+            print(
+                f"SOCIAL_CANDIDATE_REJECTED platform={p}; reason=explicit_non_target_country; "
+                f"actual_country={actual_country}; target_market={TARGET_MARKET}; url={url}"
+            )
+            continue
         if not relevant:
-            print(f"SOCIAL_RELEVANCE_OBSERVATION platform={p}; strict_filter=disabled; candidate_retained_for_observation; url={url}")
+            print(
+                f"SOCIAL_RELEVANCE_OBSERVATION platform={p}; "
+                f"market_match={market_match_status}; product_match={product_match_status}; url={url}"
+            )
 
         if (p, surl.rstrip("/")) in seen:
             continue
@@ -2713,7 +2944,17 @@ def main():
         row.update({
             "company_name": company,
             "website": web,
-            "country": TARGET_MARKET,
+            # country is now the explicitly detected company country, never a copy of the target input.
+            # If the public profile does not prove a country, leave it blank.
+            "country": actual_country,
+            "target_market": TARGET_MARKET,
+            "company_location": loc,
+            "market_match_status": market_match_status,
+            "product_match_status": product_match_status,
+            "contact_extraction_source": (
+                "provider_structured_fields_and_public_profile_text"
+                if (email or phone or whatsapp) else "no_public_contact_found"
+            ),
             "industry": inferred_industry,
             "buyer_type": BUYER_TYPES,
             "product_interest": product_labels.get(inferred_industry, inferred_industry),
@@ -2772,7 +3013,7 @@ def main():
     print(
         "SOCIAL_ONLY_PROVIDER_STATUS supported_platforms=linkedin,facebook; "
         "generic_web_search=false; google_maps=false; cloudflare_search=false; "
-        "firecrawl=false; exa=false; composio_firecrawl=false"
+        f"firecrawl_fallback=composio_only; composio_calls={COMPOSIO_CALLS_THIS_RUN}/{MAX_COMPOSIO_CALLS_PER_RUN}; exa=false"
     )
     print(
         f"Social collection: platforms={','.join(platforms_to_collect)}; "

@@ -437,6 +437,9 @@ jobs:
           COLLECTION_MODE: ${{ inputs.collection_mode || 'social' }}
           APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
           SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
+          COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
+          COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID: ${{ secrets.COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID }}
+          COMPOSIO_USER_ID: ${{ vars.COMPOSIO_USER_ID || 'GLOBALI90' }}
           SOCIAL_PLATFORM: ${{ inputs.social_platform || 'auto' }}
           SOCIAL_MAX_ITEMS: ${{ inputs.social_max_items || '3' }}
           SOCIAL_REQUEST_INTERVAL_SECONDS: '15'
