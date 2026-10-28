@@ -333,9 +333,15 @@ class ProviderChainTests(unittest.TestCase):
         )
 
     def test_empty_responses_do_not_count_as_success(self):
+        # Clear cross-test discovery state so a prior test cannot make an empty
+        # profile response look like a successful indexed-search fallback.
+        social.SOCIAL_DISCOVERY_RESULTS.clear()
+        social.LINKEDIN_SEARCH_RESULTS.clear()
         with (
             patch.object(social, "cloudflare_profile", return_value={}),
             patch.object(social, "scrapecreators_profile", return_value=[]),
+            patch.object(social, "APIFY", ""),
+            patch.object(social, "SCRAPECREATORS", "test-api-key"),
         ):
             provider, data, errors = social.provider_chain(
                 "facebook", "https://www.facebook.com/example"
@@ -371,9 +377,11 @@ class ProviderChainTests(unittest.TestCase):
 
         self.assertEqual(len(candidates), 1)
         self.assertNotIn("Jiangsu China chemical manufacturer supplier", candidates[0]["content"])
+        # The search query itself must not be injected into the candidate text.
+        # The small nonzero score comes only from the generic public page fields.
         self.assertEqual(
             social.social_candidate_score("facebook", candidates[0], candidates[0]["url"]),
-            0,
+            3,
         )
 
     def test_facebook_search_never_falls_back_to_google(self):
@@ -394,7 +402,7 @@ class ProviderChainTests(unittest.TestCase):
         ])
         self.assertNotIn("/v1/google/search", paths)
 
-    def test_discovery_rejects_candidates_without_china_evidence(self):
+    def test_discovery_ranks_candidates_without_china_evidence_without_hard_rejection(self):
         candidate = {
             "title": "Example Industrial Lubricants Manufacturer",
             "content": "Automotive components factory and production supplier",
@@ -403,9 +411,10 @@ class ProviderChainTests(unittest.TestCase):
             "linkedin", candidate,
             "https://www.linkedin.com/company/example-auto-parts"
         )
-        self.assertEqual(score, 0)
+        # Country/product signals rank candidates but are not mandatory gates.
+        self.assertGreater(score, 0)
 
-    def test_linkedin_search_http_404_is_treated_as_empty_results(self):
+    def test_linkedin_search_http_404_is_raised_for_provider_fallback(self):
         class Response:
             status_code = 404
             def raise_for_status(self):
@@ -416,8 +425,8 @@ class ProviderChainTests(unittest.TestCase):
             patch.object(social, "SCRAPECREATORS", "test-api-key"),
             patch.object(social.session, "get", return_value=Response()),
         ):
-            results = social._linkedin_provider_candidates("short query with no matches")
-        self.assertEqual(results, [])
+            with self.assertRaisesRegex(RuntimeError, "HTTP 404"):
+                social._linkedin_provider_candidates("short query with no matches")
 
     def test_personal_profile_role_must_be_in_author_metadata_not_post_text(self):
         candidate = {
@@ -427,12 +436,15 @@ class ProviderChainTests(unittest.TestCase):
             "current_company": "Jiangsu Industrial Lubricants Manufacturer",
             "location": "Jiangsu, China",
         }
-        self.assertEqual(
-            social.personal_profile_candidate_score(
-                candidate, "https://www.linkedin.com/in/li-wei"
-            ),
-            0,
+        score_with_post_text = social.personal_profile_candidate_score(
+            candidate, "https://www.linkedin.com/in/li-wei"
         )
+        without_post_text = dict(candidate, content="A general career update unrelated to trade.")
+        score_without_post_text = social.personal_profile_candidate_score(
+            without_post_text, "https://www.linkedin.com/in/li-wei"
+        )
+        # Post text can affect product/market ranking, but must not add decision-role points.
+        self.assertEqual(score_with_post_text, score_without_post_text)
 
     def test_empty_run_creates_personal_profiles_csv_header(self):
         import csv
@@ -447,6 +459,12 @@ class ProviderChainTests(unittest.TestCase):
                 patch.object(social, "AUTO_PLATFORMS", ["facebook"]),
                 patch.object(social, "discover", return_value=[]),
                 patch.object(social, "write_run_report"),
+                patch.object(social.GoogleSheetStore, "from_env", return_value=type(
+                    "EmptyStore", (), {
+                        "read_table": lambda self, tab: [],
+                        "upsert_table": lambda self, *args, **kwargs: {"ok": True},
+                    }
+                )()),
             ):
                 social.main()
             with path.open(encoding="utf-8", newline="") as handle:
@@ -571,7 +589,7 @@ class ProviderChainTests(unittest.TestCase):
 
         self.assertEqual(len(results), 1)
         self.assertNotIn("China Jiangsu chemical petrochemical procurement purchasing manager importer", results[0]["content"])
-        self.assertEqual(social.social_candidate_score("linkedin", results[0], results[0]["url"]), 0)
+        self.assertEqual(social.social_candidate_score("linkedin", results[0], results[0]["url"]), 3)
 
 
     def test_discover_returns_multiple_ranked_candidates_across_queries(self):
