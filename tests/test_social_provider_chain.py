@@ -332,13 +332,12 @@ class ProviderChainTests(unittest.TestCase):
             },
         )
 
-    def test_empty_responses_do_not_count_as_success(self):
-        # Clear cross-test discovery state so a prior test cannot make an empty
-        # profile response look like a successful indexed-search fallback.
+    def test_empty_profile_response_preserves_public_url_fallback(self):
+        # Clear cross-test discovery state so the test verifies the intentional
+        # URL-only fallback, not metadata left by an earlier discovery test.
         social.SOCIAL_DISCOVERY_RESULTS.clear()
         social.LINKEDIN_SEARCH_RESULTS.clear()
         with (
-            patch.object(social, "cloudflare_profile", return_value={}),
             patch.object(social, "scrapecreators_profile", return_value=[]),
             patch.object(social, "APIFY", ""),
             patch.object(social, "SCRAPECREATORS", "test-api-key"),
@@ -347,9 +346,12 @@ class ProviderChainTests(unittest.TestCase):
                 "facebook", "https://www.facebook.com/example"
             )
 
-        self.assertEqual(provider, "")
-        self.assertIsNone(data)
-        self.assertEqual(len(errors), 1)
+        # A public URL is preserved for review even if profile enrichment is empty.
+        # This fallback is not treated as a successful provider profile.
+        self.assertEqual(provider, "SearchDiscoveryFallback")
+        self.assertEqual(data["url"], "https://www.facebook.com/example")
+        self.assertTrue(any("using_public_search_metadata_fallback" in error for error in errors))
+        self.assertTrue(any("ScrapeCreators:empty" in error for error in errors))
 
 
 
