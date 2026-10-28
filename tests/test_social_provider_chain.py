@@ -439,7 +439,7 @@ class ProviderChainTests(unittest.TestCase):
         score_with_post_text = social.personal_profile_candidate_score(
             candidate, "https://www.linkedin.com/in/li-wei"
         )
-        without_post_text = dict(candidate, content="A general career update unrelated to trade.")
+        without_post_text = dict(candidate, content="China industrial lubricant information; contact our team")
         score_without_post_text = social.personal_profile_candidate_score(
             without_post_text, "https://www.linkedin.com/in/li-wei"
         )
