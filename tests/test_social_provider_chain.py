@@ -387,6 +387,36 @@ class ProviderChainTests(unittest.TestCase):
 
 
 
+    def test_facebook_ad_library_search_extracts_public_page_url(self):
+        response = {
+            "success": True,
+            "searchResults": [{
+                "page_id": "123456",
+                "page_name": "Gasoline Trading Company",
+                "page_profile_uri": "https://www.facebook.com/gasoline-trading/",
+                "page_categories": ["Energy Company"],
+                "snapshot": {"body": {"text": "Gasoline supplier and fuel distributor"}},
+            }],
+        }
+        with patch.object(social, "_scrapecreators_get", return_value=response) as get:
+            candidates = social._facebook_native_candidates(
+                'China ("gasoline" OR "petrol" OR "motor gasoline") company page supplier'
+            )
+
+        get.assert_called_once_with(
+            "/v1/facebook/adLibrary/search/ads",
+            {
+                "query": "gasoline",
+                "search_type": "keyword_unordered",
+                "status": "ACTIVE",
+                "trim": "true",
+            },
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["url"], "https://www.facebook.com/gasoline-trading")
+        self.assertIn("Energy Company", candidates[0]["content"])
+        self.assertIn("fuel distributor", candidates[0]["content"])
+
     def test_facebook_search_query_is_not_counted_as_profile_evidence(self):
         class Response:
             def raise_for_status(self):
