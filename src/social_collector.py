@@ -584,7 +584,7 @@ def _facebook_ad_search_term(query):
     if quoted_terms:
         return quoted_terms[0][:120]
     # The third query is not an OR group; use the selected product label only.
-    product = re.sub(r"\\s+", " ", PRODUCT_NAME.replace("/", " ")).strip()
+    product = re.sub(r"\s+", " ", PRODUCT_NAME.replace("/", " ")).strip()
     return product[:120] or val(query)[:120]
 
 
