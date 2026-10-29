@@ -472,8 +472,8 @@ class ProviderChainTests(unittest.TestCase):
         self.assertEqual(second, [])
         paths = [call.args[0] for call in mocked_get.call_args_list]
         self.assertEqual(paths, [
-            "/v1/facebook/adLibrary/search/companies",
-            "/v1/facebook/adLibrary/search/companies",
+            "/v1/facebook/adLibrary/search/ads",
+            "/v1/facebook/adLibrary/search/ads",
         ])
         self.assertNotIn("/v1/google/search", paths)
 
