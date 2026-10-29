@@ -410,6 +410,7 @@ class ProviderChainTests(unittest.TestCase):
                 "search_type": "keyword_unordered",
                 "status": "ACTIVE",
                 "trim": "true",
+                "country": "CN",
             },
         )
         self.assertEqual(len(candidates), 1)
