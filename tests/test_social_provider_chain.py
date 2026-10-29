@@ -9,6 +9,13 @@ import gemini_utils
 
 
 class ProviderChainTests(unittest.TestCase):
+    def test_apify_linkedin_query_simplifies_boolean_product_synonyms(self):
+        query = 'China ("gasoline" OR "petrol" OR "motor gasoline") company supplier importer trader'
+        self.assertEqual(
+            social._apify_linkedin_query(query),
+            "China gasoline company supplier importer trader",
+        )
+
     def test_composio_search_resolves_rest_account_and_owner(self):
         class Response:
             status_code = 200
