@@ -630,12 +630,14 @@ def _facebook_native_candidates(query):
             snapshot.get("page_profile_uri") or snapshot.get("pageProfileUri")
             or item.get("page_profile_uri") or item.get("pageProfileUri")
             or item.get("page_url") or item.get("pageUrl")
-            or item.get("facebook_url") or item.get("url")
+            or item.get("facebook_url")
         )
         if not url and alias:
             url = f"https://www.facebook.com/{alias}/"
         if not url and page_id:
             url = f"https://www.facebook.com/{page_id}"
+        if not url:
+            url = val(item.get("url"))
         url = url.split("#", 1)[0].rstrip("/")
         if not url or url in seen or not good("facebook", url):
             continue
