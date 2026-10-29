@@ -1598,13 +1598,22 @@ def actor(p, payload):
     if not APIFY:
         raise RuntimeError("APIFY_API_TOKEN missing")
 
+    # Apify run controls are URL query parameters, not actor INPUT fields.
+    # Keeping the cap in the JSON body silently leaves the run uncapped.
+    actor_input = dict(payload)
+    run_params = {}
+    max_total_charge = actor_input.pop("maxTotalChargeUsd", None)
+    if max_total_charge is not None:
+        run_params["maxTotalChargeUsd"] = max_total_charge
+
     r = session.post(
         f"https://api.apify.com/v2/acts/{ACTORS[p]}/run-sync-get-dataset-items",
         headers={
             "Authorization": f"Bearer {APIFY}",
             "Content-Type": "application/json"
         },
-        json=payload,
+        params=run_params,
+        json=actor_input,
         timeout=180
     )
     try:
