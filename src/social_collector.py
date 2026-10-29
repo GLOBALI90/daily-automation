@@ -970,12 +970,32 @@ def _brave_search_candidates(platform, query):
     return out
 
 
+def _apify_linkedin_query(query):
+    """Convert our human/provider query into a simple actor-compatible search string.
+
+    The company-search actor has returned empty datasets for long Boolean queries
+    with nested quoted OR groups. Keep one product synonym per bounded request;
+    the workflow already issues separate product-aware queries.
+    """
+    value = val(query)
+    def simplify_group(match):
+        alternatives = re.findall(r'"([^"]+)"', match.group(1))
+        return alternatives[0] if alternatives else match.group(1)
+    value = re.sub(r'\(([^()]*)\)', simplify_group, value)
+    value = value.replace('"', "").replace("/", " ")
+    value = re.sub(r"\bOR\b", " ", value, flags=re.I)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value[:300]
+
+
 def _apify_linkedin_company_candidates(query):
     """Search public LinkedIn company pages through Apify, with bounded cost."""
     if not APIFY:
         raise RuntimeError("APIFY_API_TOKEN missing for LinkedIn company search")
+    apify_query = _apify_linkedin_query(query)
+    print(f"APIFY_LINKEDIN_SEARCH_QUERY {apify_query}")
     items = actor("linkedin_search", {
-        "searchQuery": query,
+        "searchQuery": apify_query,
         "maxItems": min(15, MAX_ITEMS * 3),
         "takePages": 1,
         # Country is already expressed in the search query. The actor's separate
