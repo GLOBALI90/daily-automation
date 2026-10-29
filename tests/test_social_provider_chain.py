@@ -16,6 +16,31 @@ class ProviderChainTests(unittest.TestCase):
             "China gasoline company supplier importer trader",
         )
 
+    def test_apify_cost_cap_is_sent_as_run_parameter_not_actor_input(self):
+        class Response:
+            status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return []
+
+        with (
+            patch.object(social, "APIFY", "test-apify-token"),
+            patch.object(social.session, "post", return_value=Response()) as post,
+        ):
+            self.assertEqual(
+                social.actor("linkedin_search", {
+                    "searchQuery": "China gasoline company",
+                    "maxTotalChargeUsd": 0.10,
+                }),
+                [],
+            )
+
+        self.assertEqual(post.call_args.kwargs["params"], {"maxTotalChargeUsd": 0.10})
+        self.assertEqual(post.call_args.kwargs["json"], {"searchQuery": "China gasoline company"})
+
     def test_composio_search_resolves_rest_account_and_owner(self):
         class Response:
             status_code = 200
