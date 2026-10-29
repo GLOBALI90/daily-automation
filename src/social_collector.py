@@ -591,14 +591,24 @@ def _facebook_ad_search_term(query):
 def _facebook_native_candidates(query):
     """Find public Facebook pages from matching public Meta Ad Library ads."""
     search_term = _facebook_ad_search_term(query)
+    search_params = {
+        "query": search_term,
+        "search_type": "keyword_unordered",
+        "status": "ACTIVE",
+        "trim": "true",
+    }
+    # Meta Ad Library accepts a two-letter country filter. This limits results
+    # to ads running in the target market while leaving unknown country codes
+    # unfiltered rather than risking a bad filter.
+    ad_country = firecrawl_country_code(TARGET_MARKET).upper()
+    if ad_country == "UK":
+        ad_country = "GB"
+    if re.fullmatch(r"[A-Z]{2}", ad_country):
+        search_params["country"] = ad_country
+
     data = _scrapecreators_get(
         "/v1/facebook/adLibrary/search/ads",
-        {
-            "query": search_term,
-            "search_type": "keyword_unordered",
-            "status": "ACTIVE",
-            "trim": "true",
-        },
+        search_params,
     )
 
     # ScrapeCreators returns searchResults at the root; tolerate common wrappers.
