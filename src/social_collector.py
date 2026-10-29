@@ -578,18 +578,34 @@ def _scrapecreators_get(path, params):
     return data
 
 
+def _facebook_ad_search_term(query):
+    """Search the Meta Ad Library by product keywords, not by a fake company name."""
+    quoted_terms = re.findall(r'"([^"]+)"', val(query))
+    if quoted_terms:
+        return quoted_terms[0][:120]
+    # The third query is not an OR group; use the selected product label only.
+    product = re.sub(r"\\s+", " ", PRODUCT_NAME.replace("/", " ")).strip()
+    return product[:120] or val(query)[:120]
+
+
 def _facebook_native_candidates(query):
-    """Search the provider's Facebook Ad Library company index; no login or access-control bypass."""
+    """Find public Facebook pages from matching public Meta Ad Library ads."""
+    search_term = _facebook_ad_search_term(query)
     data = _scrapecreators_get(
-        "/v1/facebook/adLibrary/search/companies", {"query": query}
+        "/v1/facebook/adLibrary/search/ads",
+        {
+            "query": search_term,
+            "search_type": "keyword_unordered",
+            "status": "ACTIVE",
+            "trim": "true",
+        },
     )
 
-    # Provider response wrappers have varied; accept documented result containers
-    # without treating arbitrary nested objects as page records.
+    # ScrapeCreators returns searchResults at the root; tolerate common wrappers.
     items = []
     containers = [data]
     if isinstance(data, dict):
-        for key in ("data", "result", "results", "searchResults", "items"):
+        for key in ("data", "result", "results", "items"):
             value = data.get(key)
             if isinstance(value, (dict, list)):
                 containers.append(value)
@@ -597,26 +613,24 @@ def _facebook_native_candidates(query):
         if isinstance(container, list):
             items.extend(item for item in container if isinstance(item, dict))
         elif isinstance(container, dict):
-            for key in ("searchResults", "results", "items", "companies", "pages", "data"):
+            for key in ("searchResults", "results", "items", "ads", "data"):
                 value = container.get(key)
                 if isinstance(value, list):
                     items.extend(item for item in value if isinstance(item, dict))
+
     out, seen = [], set()
     for item in items:
-        page = item.get("page") if isinstance(item.get("page"), dict) else {}
-        company = item.get("company") if isinstance(item.get("company"), dict) else {}
+        snapshot = item.get("snapshot") if isinstance(item.get("snapshot"), dict) else {}
+        page_id = val(item.get("page_id") or item.get("pageId") or snapshot.get("page_id"))
         alias = val(
-            item.get("page_alias") or item.get("pageAlias") or item.get("username")
-            or page.get("username") or page.get("alias")
-        )
-        page_id = val(
-            item.get("page_id") or item.get("pageId") or item.get("id")
-            or page.get("id") or company.get("page_id")
+            item.get("page_alias") or item.get("pageAlias")
+            or item.get("username") or item.get("alias")
         )
         url = val(
-            item.get("url") or item.get("page_url") or item.get("page_profile_uri")
-            or item.get("pageUrl") or page.get("url") or page.get("link")
-            or company.get("facebook_url")
+            snapshot.get("page_profile_uri") or snapshot.get("pageProfileUri")
+            or item.get("page_profile_uri") or item.get("pageProfileUri")
+            or item.get("page_url") or item.get("pageUrl")
+            or item.get("facebook_url") or item.get("url")
         )
         if not url and alias:
             url = f"https://www.facebook.com/{alias}/"
@@ -625,34 +639,44 @@ def _facebook_native_candidates(query):
         url = url.split("#", 1)[0].rstrip("/")
         if not url or url in seen or not good("facebook", url):
             continue
+        if (
+            item.get("page_is_deleted") is True
+            or item.get("page_is_profile_page") is True
+            or item.get("is_profile_page") is True
+            or val(item.get("entity_type") or item.get("page_entity_type")).upper() == "PERSON_PROFILE"
+        ):
+            continue
         path = urlparse(url).path.lower()
         if any(part in path for part in (
             "/posts/", "/photos/", "/videos/", "/reel/", "/watch", "/groups/",
-            "/events/", "/marketplace/", "/login", "/share/"
+            "/events/", "/marketplace/", "/login", "/share/", "/ads/library"
         )):
             continue
         seen.add(url)
-        title = val(
-            item.get("page_name") or item.get("name") or item.get("title")
-            or page.get("name") or company.get("name") or alias
-        )
-        content = val(
-            item.get("description") or item.get("about") or item.get("category")
-            or item.get("category_name") or page.get("description")
-            or company.get("description")
+        body = snapshot.get("body") if isinstance(snapshot.get("body"), dict) else {}
+        page_categories = item.get("page_categories") or snapshot.get("page_categories") or []
+        if isinstance(page_categories, list):
+            category_text = " ".join(val(v) for v in page_categories if val(v))
+        else:
+            category_text = val(page_categories)
+        title = val(item.get("page_name") or snapshot.get("page_name") or item.get("name") or alias)
+        content = " | ".join(
+            val(value) for value in (
+                category_text, body.get("text"), snapshot.get("link_description"),
+                snapshot.get("title"), item.get("description"), item.get("category")
+            ) if val(value)
         )
         out.append({
             "url": url,
             "title": title,
             "content": content,
-            "search_provider": "ScrapeCreators Facebook Ad Library Company Search",
+            "search_provider": "ScrapeCreators Facebook Ad Library Search",
         })
     print(
-        f"FACEBOOK_NATIVE_ADLIBRARY platform=facebook; raw_results={len(items)}; "
-        f"usable_public_pages={len(out)}; web_search_used=false"
+        f"FACEBOOK_NATIVE_ADLIBRARY platform=facebook; query={search_term!r}; "
+        f"raw_results={len(items)}; usable_public_pages={len(out)}; web_search_used=false"
     )
     return out
-
 
 def _x_native_candidates(query):
     if not APIFY:
