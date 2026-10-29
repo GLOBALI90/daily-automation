@@ -16,6 +16,16 @@ class ProviderChainTests(unittest.TestCase):
             "China gasoline company supplier importer trader",
         )
 
+    def test_public_social_search_evidence_can_supply_published_contacts(self):
+        evidence = social.merge_public_social_evidence(
+            "Industrial fuel supplier",
+            "Contact sales: sales@example.com; WhatsApp: +86 138 0013 8000",
+        )
+        email, whatsapp, phone = social.extract_public_contacts(evidence)
+        self.assertEqual(email, "sales@example.com")
+        self.assertEqual(whatsapp, "+8613800138000")
+        self.assertEqual(phone, "+8613800138000")
+
     def test_apify_cost_cap_is_sent_as_run_parameter_not_actor_input(self):
         class Response:
             status_code = 200
