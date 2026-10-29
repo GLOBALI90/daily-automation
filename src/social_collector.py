@@ -1866,6 +1866,17 @@ def profile_field_names(company, web, loc, contact, email, phone, bio, followers
     return [key for key, value in values.items() if val(value)]
 
 
+def merge_public_social_evidence(profile_text, discovery_text):
+    """Combine provider profile text with public social post/ad evidence for relevance and contacts."""
+    profile = val(profile_text)
+    evidence = val(discovery_text)
+    if not evidence or evidence.lower() in profile.lower():
+        return profile
+    parts = [profile] if profile else []
+    parts.append("Public social search evidence: " + evidence)
+    return " | ".join(parts)
+
+
 def extract_public_contacts(text, email="", phone=""):
     """Extract only visibly published contact details from returned public profile fields."""
     source = val(text)
@@ -2932,6 +2943,12 @@ def main():
         company, web, loc, contact, email, phone, bio, followers, verified, surl = (
             normalize_provider(p, provider, data, url)
         )
+        discovery_record = SOCIAL_DISCOVERY_RESULTS.get((p, url.rstrip("/")), {})
+        discovery_text = val(
+            discovery_record.get("content") or discovery_record.get("snippet")
+            or discovery_record.get("description")
+        )
+        bio = merge_public_social_evidence(bio, discovery_text)
         if not company or company.lower() in {"unknown", "none", "n/a"}:
             indexed = LINKEDIN_SEARCH_RESULTS.get(url.rstrip("/"), {}) if p == "linkedin" else {}
             company = val(indexed.get("title")) or handle_from_url(url).replace("-", " ").replace("_", " ").title()
@@ -3021,8 +3038,11 @@ def main():
             "market_match_status": market_match_status,
             "product_match_status": product_match_status,
             "contact_extraction_source": (
-                "provider_structured_fields_and_public_profile_text"
-                if (email or phone or whatsapp) else "no_public_contact_found"
+                "provider_fields_and_public_social_search_evidence"
+                if (email or phone or whatsapp) and discovery_text
+                else "provider_structured_fields_and_public_profile_text"
+                if (email or phone or whatsapp)
+                else "no_public_contact_found"
             ),
             "industry": inferred_industry,
             "buyer_type": BUYER_TYPES,
