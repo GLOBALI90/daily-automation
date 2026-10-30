@@ -96,6 +96,8 @@ DUPLICATE_PREFILTER_SKIPPED = 0
 PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").strip().lower().lstrip(chr(92) + "/")
 
 APIFY = os.getenv("APIFY_API_TOKEN", "").strip()
+APIFY_LINKEDIN_SEARCH_CALLS_THIS_RUN = 0
+MAX_APIFY_LINKEDIN_SEARCH_CALLS_PER_RUN = 2
 SCRAPECREATORS = os.getenv("SCRAPECREATORS_API_KEY", "").strip()
 # Legacy Brave adapter is disabled in the workflow; kept only for compatibility tests.
 BRAVE_SEARCH_API_KEY = ""
@@ -1032,12 +1034,14 @@ def _apify_linkedin_company_candidates(query):
     print(f"APIFY_LINKEDIN_SEARCH_QUERY {apify_query}")
     items = actor("linkedin_search", {
         "searchQuery": apify_query,
-        "maxItems": min(15, MAX_ITEMS * 3),
+        "maxItems": min(6, max(3, MAX_ITEMS * 2)),
         "takePages": 1,
         # Country is already expressed in the search query. The actor's separate
         # location filter can suppress otherwise valid company-page search results
         # when the profile has no structured headquarters/location field.
-        "maxTotalChargeUsd": 0.10,
+        # Keep each request under two cents; only two LinkedIn search requests run
+        # per workflow invocation to protect the Apify free monthly allowance.
+        "maxTotalChargeUsd": 0.02,
     })
     out = []
     seen = set()
@@ -1085,7 +1089,9 @@ def native_candidates(platform, query):
         # a replacement is configured; keep ScrapeCreators profile enrichment
         # enabled for Facebook and provider-returned LinkedIn profile URLs.
         print("LINKEDIN_SEARCH_PROVIDER_DISABLED provider=ScrapeCreators; reason=repeated_http_404; active_search=Apify_only")
-        if APIFY:
+        global APIFY_LINKEDIN_SEARCH_CALLS_THIS_RUN
+        if APIFY and APIFY_LINKEDIN_SEARCH_CALLS_THIS_RUN < MAX_APIFY_LINKEDIN_SEARCH_CALLS_PER_RUN:
+            APIFY_LINKEDIN_SEARCH_CALLS_THIS_RUN += 1
             try:
                 for item in _apify_linkedin_company_candidates(query):
                     url = val(item.get("url")).rstrip("/")
