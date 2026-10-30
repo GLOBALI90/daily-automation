@@ -98,6 +98,9 @@ PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").strip().lower().lstrip(chr(92) +
 APIFY = os.getenv("APIFY_API_TOKEN", "").strip()
 APIFY_LINKEDIN_SEARCH_CALLS_THIS_RUN = 0
 MAX_APIFY_LINKEDIN_SEARCH_CALLS_PER_RUN = 2
+APIFY_FACEBOOK_PAGE_CALLS_THIS_RUN = 0
+MAX_APIFY_FACEBOOK_PAGE_CALLS_PER_RUN = 2
+MAX_APIFY_FACEBOOK_PAGE_CHARGE_USD = 0.025
 SCRAPECREATORS = os.getenv("SCRAPECREATORS_API_KEY", "").strip()
 # Legacy Brave adapter is disabled in the workflow; kept only for compatibility tests.
 BRAVE_SEARCH_API_KEY = ""
@@ -1489,6 +1492,149 @@ def composio_search_candidates(platform, query):
     return candidates
 
 
+
+# You.com is a last-resort discovery fallback only. Its free MCP profile
+# requires no API key/card and is documented at 100 search queries per day.
+YOUCOM_MCP_URL = "https://api.you.com/mcp?profile=free"
+YOUCOM_MCP_PROTOCOL = "2026-07-28"
+YOUCOM_SEARCHES_THIS_RUN = 0
+MAX_YOUCOM_SEARCHES_PER_RUN = 2
+YOUCOM_AUDIT = []
+
+
+def _youcom_mcp_parse_reply(response, rpc_id):
+    content_type = response.headers.get("Content-Type", "").lower()
+    raw = response.text
+    if "application/json" in content_type:
+        messages = [response.json()]
+    else:
+        messages = []
+        for event in raw.replace("\r\n", "\n").split("\n\n"):
+            data_lines = [
+                line[5:].lstrip() for line in event.splitlines()
+                if line.startswith("data:")
+            ]
+            if data_lines:
+                messages.append(json.loads("\n".join(data_lines)))
+    for message in messages:
+        if message.get("id") == rpc_id:
+            if "error" in message:
+                raise RuntimeError("youcom_jsonrpc_error:" + val(message["error"])[:300])
+            return message.get("result") or {}
+    raise RuntimeError("youcom_mcp_reply_id_missing")
+
+
+def youcom_social_candidates(platform, query):
+    """Last-resort You.com search, host-pinned to exactly one approved social domain."""
+    global YOUCOM_SEARCHES_THIS_RUN
+    if platform not in ("linkedin", "facebook"):
+        return []
+    if YOUCOM_SEARCHES_THIS_RUN >= MAX_YOUCOM_SEARCHES_PER_RUN:
+        print(f"YOUCOM_FALLBACK_SKIPPED platform={platform}; reason=per_run_cap_reached")
+        return []
+    YOUCOM_SEARCHES_THIS_RUN += 1
+
+    allowed_domain = "linkedin.com" if platform == "linkedin" else "facebook.com"
+    search_query = (
+        f'{TARGET_MARKET} "{PRODUCT_NAME}" '
+        f'{BUYER_TYPES} public {platform} company page supplier importer distributor'
+    )[:390]
+    rpc_id = 2
+    params = {
+        "name": "you-search",
+        "arguments": {"query": search_query, "count": min(8, max(3, MAX_ITEMS * 2))},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": YOUCOM_MCP_PROTOCOL,
+            "io.modelcontextprotocol/clientInfo": {
+                "name": "daily-automation-social-collector", "version": "1.0"
+            },
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "com.you.com/search": {"include_domains": [allowed_domain], "extraction": "highlights"},
+        },
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": YOUCOM_MCP_PROTOCOL,
+        "Mcp-Method": "tools/call",
+        "Mcp-Name": "you-search",
+        "User-Agent": "rozhanglobal-social-collector/1.0",
+    }
+    started = time.monotonic()
+    response = session.post(
+        YOUCOM_MCP_URL,
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": rpc_id, "method": "tools/call", "params": params},
+        timeout=60,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"youcom_http_{response.status_code}:{response.text[:250]}")
+    result = _youcom_mcp_parse_reply(response, rpc_id)
+    if result.get("isError"):
+        error_text = " ".join(
+            val(item.get("text")) for item in result.get("content", [])
+            if isinstance(item, dict)
+        )
+        raise RuntimeError("youcom_tool_error:" + error_text[:300])
+    payload = result.get("structuredContent")
+    if not isinstance(payload, dict):
+        text_blocks = [
+            val(item.get("text")) for item in result.get("content", [])
+            if isinstance(item, dict) and val(item.get("text"))
+        ]
+        payload = json.loads(text_blocks[0]) if text_blocks else {}
+
+    web_results = ((payload.get("results") or {}).get("web") or [])
+    candidates, seen = [], set()
+    for item in web_results:
+        if not isinstance(item, dict):
+            continue
+        url = val(item.get("url")).split("#", 1)[0].rstrip("/")
+        if not url or url in seen or not good(platform, url):
+            continue
+        path = urlparse(url).path.lower()
+        if platform == "linkedin" and not (
+            path.startswith("/company/") or path.startswith("/in/")
+        ):
+            continue
+        if platform == "facebook" and (
+            not path or any(part in path for part in (
+                "/posts/", "/photos/", "/videos/", "/reel/", "/watch",
+                "/groups/", "/events/", "/marketplace/", "/login", "/ads/library"
+            ))
+        ):
+            continue
+        seen.add(url)
+        snippets = item.get("snippets") or []
+        if isinstance(snippets, list):
+            snippet = " | ".join(val(x) for x in snippets if val(x))
+        else:
+            snippet = val(snippets)
+        highlights = ((item.get("contents") or {}).get("highlights") or [])
+        if isinstance(highlights, list):
+            snippet = " | ".join(filter(None, [snippet, " | ".join(val(x) for x in highlights)]))
+        candidates.append({
+            "url": url,
+            "title": val(item.get("title")),
+            "content": val(item.get("description")) + ((" | " + snippet) if snippet else ""),
+            "search_provider": "You.com Free MCP (domain-pinned fallback)",
+            "discovery_method": "youcom_social_domain_fallback",
+        })
+
+    audit = {
+        "platform": platform, "http_status": response.status_code,
+        "elapsed_seconds": round(time.monotonic() - started, 2),
+        "outcome": "success", "candidate_count": len(candidates),
+        "allowed_domain": allowed_domain,
+    }
+    YOUCOM_AUDIT.append(audit)
+    print(
+        f"YOUCOM_SOCIAL_FALLBACK platform={platform}; allowed_domain={allowed_domain}; "
+        f"candidates={len(candidates)}; calls={YOUCOM_SEARCHES_THIS_RUN}/{MAX_YOUCOM_SEARCHES_PER_RUN}"
+    )
+    return candidates
+
+
 def discover(p):
     """Discover candidates exclusively through LinkedIn/Facebook-specific providers."""
     global DUPLICATE_PREFILTER_SKIPPED
@@ -1534,8 +1680,41 @@ def discover(p):
             if current is None or score > current[0]:
                 target[url] = candidate
 
-    # Firecrawl fallback remains disabled until a funded replacement or
-    # a verified free search provider is connected through Composio.
+    # You.com is invoked only if every platform-specific primary search returned
+    # no usable candidates. The MCP host override pins results to this platform's
+    # domain; a second URL guard below rejects anything outside it.
+    if not ranked_by_url and not personal_by_url:
+        fallback_query = (
+            f'{TARGET_MARKET} "{PRODUCT_NAME}" {BUYER_TYPES} '
+            f'public {p} company page supplier importer distributor'
+        )
+        try:
+            fallback_items = youcom_social_candidates(p, fallback_query)
+            for item in fallback_items:
+                url = val(item.get("url")).rstrip("/")
+                if not url or not good(p, url):
+                    continue
+                if is_existing_candidate(p, url):
+                    DUPLICATE_PREFILTER_SKIPPED += 1
+                    print(f"Skipping previously stored You.com candidate: platform={p}; url={url}")
+                    continue
+                SOCIAL_DISCOVERY_RESULTS[(p, url.rstrip("/"))] = item
+                score = social_candidate_score(p, item, url)
+                if not score:
+                    continue
+                is_personal = p == "linkedin" and urlparse(url).path.lower().startswith("/in/")
+                target = personal_by_url if is_personal else ranked_by_url
+                candidate = (score, url, fallback_query, "youcom_social_domain_fallback")
+                current = target.get(url)
+                if current is None or score > current[0]:
+                    target[url] = candidate
+        except Exception as exc:
+            DISCOVERY_ERRORS.append({
+                "platform": p, "provider": "You.com",
+                "error_type": type(exc).__name__, "error": str(exc)[:500],
+            })
+            print(f"YOUCOM_SOCIAL_FALLBACK_FAILED platform={p}; {type(exc).__name__}: {exc}")
+
     ranked = sorted(ranked_by_url.values(), key=lambda item: item[0], reverse=True)
     personal_ranked = sorted(personal_by_url.values(), key=lambda item: item[0], reverse=True)
     selected = ranked[:MAX_ITEMS]
@@ -1649,7 +1828,15 @@ def apify_profile(p, url):
             "urls": [canonical_linkedin_url(url)]
         })
     if p == "facebook":
-        return actor(p, {"startUrls": [{"url": url}]})
+        global APIFY_FACEBOOK_PAGE_CALLS_THIS_RUN
+        if APIFY_FACEBOOK_PAGE_CALLS_THIS_RUN >= MAX_APIFY_FACEBOOK_PAGE_CALLS_PER_RUN:
+            raise RuntimeError("apify_facebook_page_per_run_cap_reached")
+        # One known public Page URL per call; keep total actor spend bounded.
+        APIFY_FACEBOOK_PAGE_CALLS_THIS_RUN += 1
+        return actor(p, {
+            "startUrls": [{"url": url}],
+            "maxTotalChargeUsd": MAX_APIFY_FACEBOOK_PAGE_CHARGE_USD,
+        })
     return actor(p, {
         "startUrls": [url],
         "maxItems": 1,
@@ -1724,6 +1911,10 @@ def provider_chain(p, url):
         providers.append(("ScrapeCreators", lambda: scrapecreators_profile(p, url)))
     if p == "linkedin" and APIFY:
         providers.append(("Apify", lambda: apify_profile(p, url)))
+    if p == "facebook" and APIFY:
+        # Secondary enrichment only: invoked when ScrapeCreators fails or
+        # returns an unusable public Page response.
+        providers.append(("ApifyFacebookPages", lambda: apify_profile(p, url)))
     if not providers:
         errors.append("no_profile_provider_available_or_worker_cap_reached")
 
@@ -2171,8 +2362,15 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "cloudflare_primary_discovery": False,
         "collection_scope": "linkedin_facebook_only",
         "composio_calls_used": COMPOSIO_CALLS_THIS_RUN,
+        "youcom_searches_used": YOUCOM_SEARCHES_THIS_RUN,
+        "youcom_search_cap": MAX_YOUCOM_SEARCHES_PER_RUN,
+        "apify_facebook_page_calls": APIFY_FACEBOOK_PAGE_CALLS_THIS_RUN,
+        "apify_facebook_page_call_cap": MAX_APIFY_FACEBOOK_PAGE_CALLS_PER_RUN,
+        "apify_facebook_page_max_charge_usd": MAX_APIFY_FACEBOOK_PAGE_CHARGE_USD,
+        "youcom_audit": YOUCOM_AUDIT,
         "composio_call_cap": MAX_COMPOSIO_CALLS_PER_RUN,
         "generic_web_search_enabled": False,
+        "youcom_domain_restricted": True,
         "google_maps_enabled": False,
         "provider_counts": provider_counts,
         "discovery_errors": DISCOVERY_ERRORS,
@@ -2187,7 +2385,8 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         ),
         "notes": [
             "Public LinkedIn company pages, qualifying public LinkedIn personal profiles, and public Facebook pages only.",
-            "Native provider discovery runs first; Composio Firecrawl is a maximum-two-call fallback limited to LinkedIn/Facebook URLs.",
+            "Platform-specific LinkedIn/Facebook providers run first; You.com free MCP is a maximum-two-search last-resort fallback pinned to the relevant social domain.",
+            "Facebook Page enrichment uses Apify only after ScrapeCreators failure/unusable output; max 2 calls per workflow run, maxTotalChargeUsd $0.025 per actor run.",
             "country remains the legacy target-market label for downstream compatibility; target_market and company_location separately expose target and observed location.",
             "market_match_status and product_match_status are evidence labels; needs_review means the public profile did not prove the match.",
             "HTTP success does not guarantee usable public profile fields.",
@@ -3077,7 +3276,7 @@ def main():
     print(
         "SOCIAL_ONLY_PROVIDER_STATUS supported_platforms=linkedin,facebook; "
         "generic_web_search=false; google_maps=false; cloudflare_search=false; "
-        f"firecrawl_fallback=composio_only; composio_calls={COMPOSIO_CALLS_THIS_RUN}/{MAX_COMPOSIO_CALLS_PER_RUN}; exa=false"
+        f"youcom_fallback=last_resort_domain_pinned; youcom_calls={YOUCOM_SEARCHES_THIS_RUN}/{MAX_YOUCOM_SEARCHES_PER_RUN}; firecrawl=false; exa=false"
     )
     print(
         f"Social collection: platforms={','.join(platforms_to_collect)}; "
