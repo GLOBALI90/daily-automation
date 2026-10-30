@@ -25,7 +25,7 @@ def _clean_list(value, limit):
     cleaned = []
     seen = set()
     for item in value:
-        text = re.sub(r"\\s+", " ", str(item or "")).strip(" \\t\\r\\n,;")
+        text = re.sub(r"\s+", " ", str(item or "")).strip(" \t\r\n,;")
         key = text.casefold()
         if text and key not in seen and len(text) <= 100:
             seen.add(key)
