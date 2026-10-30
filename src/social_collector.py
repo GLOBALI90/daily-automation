@@ -1506,13 +1506,13 @@ def _youcom_mcp_parse_reply(response, rpc_id):
         messages = [response.json()]
     else:
         messages = []
-        for event in raw.replace("\\r\\n", "\\n").split("\\n\\n"):
+        for event in raw.replace("\r\n", "\n").split("\n\n"):
             data_lines = [
                 line[5:].lstrip() for line in event.splitlines()
                 if line.startswith("data:")
             ]
             if data_lines:
-                messages.append(json.loads("\\n".join(data_lines)))
+                messages.append(json.loads("\n".join(data_lines)))
     for message in messages:
         if message.get("id") == rpc_id:
             if "error" in message:
@@ -2346,9 +2346,13 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "duplicates_skipped_before_enrichment": DUPLICATE_PREFILTER_SKIPPED,
         "cloudflare_primary_discovery": False,
         "collection_scope": "linkedin_facebook_only",
-        "composio_calls_used": COMPOSIO_CALLS_THIS_RUN,\n        "youcom_searches_used": YOUCOM_SEARCHES_THIS_RUN,\n        "youcom_search_cap": MAX_YOUCOM_SEARCHES_PER_RUN,\n        "youcom_audit": YOUCOM_AUDIT,
+        "composio_calls_used": COMPOSIO_CALLS_THIS_RUN,
+        "youcom_searches_used": YOUCOM_SEARCHES_THIS_RUN,
+        "youcom_search_cap": MAX_YOUCOM_SEARCHES_PER_RUN,
+        "youcom_audit": YOUCOM_AUDIT,
         "composio_call_cap": MAX_COMPOSIO_CALLS_PER_RUN,
-        "generic_web_search_enabled": False,\n        "youcom_domain_restricted": True,
+        "generic_web_search_enabled": False,
+        "youcom_domain_restricted": True,
         "google_maps_enabled": False,
         "provider_counts": provider_counts,
         "discovery_errors": DISCOVERY_ERRORS,
