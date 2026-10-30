@@ -443,6 +443,8 @@ jobs:
           SOCIAL_PLATFORM: ${{ inputs.social_platform || 'auto' }}
           SOCIAL_MAX_ITEMS: ${{ inputs.social_max_items || '3' }}
           SOCIAL_REQUEST_INTERVAL_SECONDS: '15'
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BUYER_AI_MODEL: gemma-4-26b-a4b-it
           GOOGLE_SHEETS_API_URL: ${{ secrets.GOOGLE_SHEETS_API_URL }}
           GOOGLE_SHEETS_API_TOKEN: ${{ secrets.GOOGLE_SHEETS_API_TOKEN }}
         run: python src/social_collector.py
