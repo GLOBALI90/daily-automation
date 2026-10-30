@@ -4,6 +4,7 @@ from pathlib import Path
 from urllib.parse import urlparse, quote
 import requests
 from google_sheet_store import GoogleSheetStore
+from product_buyer_ai import generate_product_buyer_profile
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
@@ -564,6 +565,76 @@ DISCOVERY_METHODS = {
     "linkedin": "native_linkedin_social_search",
     "facebook": "native_facebook_social_search",
 }
+
+
+def apply_ai_buyer_profile():
+    """Ask one dedicated AI model for buyer-company types and search terms.
+
+    Called only after Google Sheets has been read and existing records deduped.
+    The existing product rules remain the safe fallback if the API is unavailable.
+    """
+    global BUYER_TYPES, PRODUCT_SEARCH_PHRASES, PRODUCT_TERMS
+    global BUYER_TYPE_TERMS, NATIVE_QUERIES, CLOUDFLARE_PRIMARY_QUERY
+
+    profile = generate_product_buyer_profile(PRODUCT_NAME, TARGET_MARKET)
+    if not profile:
+        print(
+            "BUYER_AI_STATUS enabled=false; fallback=existing_product_rules; "
+            f"product={PRODUCT_NAME!r}; target_market={TARGET_MARKET!r}"
+        )
+        return
+
+    company_types = profile["company_types"]
+    ai_keywords = profile["search_keywords"]
+    BUYER_TYPES = ", ".join(company_types)
+
+    # Put AI-generated product-specific terms first so the existing bounded
+    # native queries use them without changing providers, caps, or platforms.
+    PRODUCT_SEARCH_PHRASES = tuple(dict.fromkeys(
+        [*ai_keywords, *PRODUCT_SEARCH_PHRASES]
+    ))
+    PRODUCT_TERMS = tuple(dict.fromkeys(
+        term.lower() for term in PRODUCT_SEARCH_PHRASES if term
+    ))
+    generic_buyer_terms = [
+        "manufacturer", "manufacturing", "factory", "producer", "supplier",
+        "importer", "distributor", "wholesaler", "industrial end-user",
+        "procurement", "purchasing", "采购", "生产厂家"
+    ]
+    BUYER_TYPE_TERMS = tuple(dict.fromkeys(
+        [part.strip().lower() for part in re.split(r"[,;|]", BUYER_TYPES) if part.strip()]
+        + generic_buyer_terms
+    ))
+
+    search_phrases = list(PRODUCT_SEARCH_PHRASES[:6]) or [PRODUCT_NAME]
+    query_product_2 = " OR ".join(f'"{term}"' for term in search_phrases[:3])
+    query_product_3 = " OR ".join(
+        f'"{term}"' for term in search_phrases[3:6]
+    ) or query_product_2
+    buyer_query = ", ".join(company_types[:5])
+
+    NATIVE_QUERIES = {
+        "linkedin": [
+            f'{TARGET_MARKET} ({query_product_2}) {buyer_query} company importer distributor',
+            f'{TARGET_MARKET} ({query_product_3}) {buyer_query} manufacturer trader procurement',
+            f'{TARGET_MARKET} {PRODUCT_NAME} {buyer_query} buyer company',
+        ],
+        "facebook": [
+            f'{TARGET_MARKET} ({query_product_2}) {buyer_query} company page',
+            f'{TARGET_MARKET} ({query_product_3}) {buyer_query} supplier importer',
+            f'{TARGET_MARKET} {PRODUCT_NAME} {buyer_query} distributor trading company',
+        ],
+    }
+    CLOUDFLARE_PRIMARY_QUERY = (
+        f'"{PRODUCT_NAME}" {BUYER_TYPES} {TARGET_MARKET} company contact website '
+        f'"{PRODUCT_NAME}" {TARGET_MARKET} supplier importer distributor'
+    )
+    print(
+        "BUYER_AI_STATUS enabled=true; "
+        f"model={profile.get('model', 'dedicated_buyer_model')}; "
+        f"company_types={len(company_types)}; search_keywords={len(ai_keywords)}; "
+        f"product={PRODUCT_NAME!r}; target_market={TARGET_MARKET!r}"
+    )
 
 
 def _scrapecreators_get(path, params):
@@ -2983,6 +3054,10 @@ def main():
         f"EXISTING_STATE_LOADED company_social_keys={len(EXISTING_SOCIAL_KEYS)}; "
         f"personal_profile_keys={len(EXISTING_PERSONAL_KEYS)}"
     )
+
+    # Build the product-specific buyer instructions only after durable state is
+    # loaded, and immediately before the existing LinkedIn/Facebook discovery.
+    apply_ai_buyer_profile()
 
     # Search only within the requested social networks using native provider APIs.
     # Do not call Composio Firecrawl, Google, Exa, Cloudflare /search, or Maps.
