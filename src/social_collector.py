@@ -1534,37 +1534,8 @@ def discover(p):
             if current is None or score > current[0]:
                 target[url] = candidate
 
-    # Use Composio Firecrawl as a bounded fallback only when native social
-    # discovery has not filled the requested lead cap. Each platform gets at
-    # most one Firecrawl search per run; the global cap is two calls.
-    if len(ranked_by_url) < MAX_ITEMS and COMPOSIO_API_KEY and COMPOSIO_CALLS_THIS_RUN < MAX_COMPOSIO_CALLS_PER_RUN:
-        try:
-            fallback_items = composio_search_candidates(p, NATIVE_QUERIES[p][0])
-            for item in fallback_items:
-                url = val(item.get("url")).rstrip("/")
-                if not url or not good(p, url):
-                    continue
-                if is_existing_candidate(p, url):
-                    DUPLICATE_PREFILTER_SKIPPED += 1
-                    continue
-                SOCIAL_DISCOVERY_RESULTS[(p, url.rstrip("/"))] = item
-                score = social_candidate_score(p, item, url)
-                if not score:
-                    continue
-                candidate_method = "composio_firecrawl_search"
-                current = ranked_by_url.get(url)
-                candidate = (score, url, NATIVE_QUERIES[p][0], candidate_method)
-                if current is None or score > current[0]:
-                    ranked_by_url[url] = candidate
-        except Exception as exc:
-            DISCOVERY_ERRORS.append({
-                "platform": p, "provider": "Composio Firecrawl",
-                "error_type": type(exc).__name__, "error": str(exc)[:500],
-            })
-            print(f"COMPOSIO_FIRECRAWL_FALLBACK_FAILED platform={p}; error={type(exc).__name__}: {exc}")
-    elif len(ranked_by_url) < MAX_ITEMS and not COMPOSIO_API_KEY:
-        print(f"COMPOSIO_FIRECRAWL_FALLBACK_SKIPPED platform={p}; reason=COMPOSIO_API_KEY_missing")
-
+    # Firecrawl fallback remains disabled until a funded replacement or
+    # a verified free search provider is connected through Composio.
     ranked = sorted(ranked_by_url.values(), key=lambda item: item[0], reverse=True)
     personal_ranked = sorted(personal_by_url.values(), key=lambda item: item[0], reverse=True)
     selected = ranked[:MAX_ITEMS]
