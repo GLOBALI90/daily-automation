@@ -67,7 +67,7 @@ COMPOSIO_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_AUDIT = []
 COMPOSIO_CALLS_THIS_RUN = 0
 MAX_COMPOSIO_CALLS_PER_RUN = 2
-COMPOSIO_API_KEY = ""  # Disabled: connected Firecrawl account exhausted its credits.
+COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
 FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "").strip()
 COLLECTION_MODE = os.getenv("COLLECTION_MODE", "social").strip().lower()
 PRODUCT_LEADS = DATA / "product_leads.csv"
@@ -82,10 +82,10 @@ MAX_FIRECRAWL_SEARCHES_PER_RUN = 1
 FIRECRAWL_SCRAPES_THIS_RUN = 0
 MAX_FIRECRAWL_SCRAPES_PER_RUN = 1
 GITHUB_RUN_NUMBER = int(os.getenv("GITHUB_RUN_NUMBER", "0") or "0")
-COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID = ""  # Disabled with Composio Firecrawl fallback.
-COMPOSIO_USER_ID = ""  # Disabled with Composio Firecrawl fallback.
+COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID = os.getenv("COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID", "").strip()
+COMPOSIO_USER_ID = os.getenv("COMPOSIO_USER_ID", "").strip()
 CLOUDFLARE_PRIMARY_ENRICHMENT = os.getenv("CLOUDFLARE_PRIMARY_ENRICHMENT", "false").strip().lower() in ("1", "true", "yes", "on")
-COMPOSIO_EXECUTE_URL = "https://backend.composio.dev/api/v3.1/tools/execute/FIRECRAWL_SEARCH"
+COMPOSIO_EXECUTE_URL = "https://backend.composio.dev/api/v3/tools/execute/FIRECRAWL_SEARCH"
 CLOUDFLARE_PRIMARY_QUERY = (
     f'"{PRODUCT_NAME}" {BUYER_TYPES} {TARGET_MARKET} company contact website '
     f'"{PRODUCT_NAME}" {TARGET_MARKET} supplier importer distributor'
@@ -1310,9 +1310,9 @@ def _resolve_composio_firecrawl_account():
     if not COMPOSIO_API_KEY:
         raise RuntimeError("COMPOSIO_API_KEY missing")
     response = session.get(
-        "https://backend.composio.dev/api/v3.1/connected_accounts",
+        "https://backend.composio.dev/api/v3/connected_accounts",
         headers={"x-api-key": COMPOSIO_API_KEY, "Accept": "application/json"},
-        params={"account_type": "ALL", "limit": 100},
+        params={"toolkit_slugs": "firecrawl", "statuses": "ACTIVE", "account_type": "ALL", "limit": 100},
         timeout=20,
     )
     response.raise_for_status()
@@ -1529,8 +1529,37 @@ def discover(p):
             if current is None or score > current[0]:
                 target[url] = candidate
 
-    # Composio Firecrawl fallback is disabled: its account has insufficient
-    # credits. Do not call it again until a funded replacement is configured.
+    # Use Composio Firecrawl as a bounded fallback only when native social
+    # discovery has not filled the requested lead cap. Each platform gets at
+    # most one Firecrawl search per run; the global cap is two calls.
+    if len(ranked_by_url) < MAX_ITEMS and COMPOSIO_API_KEY and COMPOSIO_CALLS_THIS_RUN < MAX_COMPOSIO_CALLS_PER_RUN:
+        try:
+            fallback_items = composio_search_candidates(p, NATIVE_QUERIES[p][0])
+            for item in fallback_items:
+                url = val(item.get("url")).rstrip("/")
+                if not url or not good(p, url):
+                    continue
+                if is_existing_candidate(p, url):
+                    DUPLICATE_PREFILTER_SKIPPED += 1
+                    continue
+                SOCIAL_DISCOVERY_RESULTS[(p, url.rstrip("/"))] = item
+                score = social_candidate_score(p, item, url)
+                if not score:
+                    continue
+                candidate_method = "composio_firecrawl_search"
+                current = ranked_by_url.get(url)
+                candidate = (score, url, NATIVE_QUERIES[p][0], candidate_method)
+                if current is None or score > current[0]:
+                    ranked_by_url[url] = candidate
+        except Exception as exc:
+            DISCOVERY_ERRORS.append({
+                "platform": p, "provider": "Composio Firecrawl",
+                "error_type": type(exc).__name__, "error": str(exc)[:500],
+            })
+            print(f"COMPOSIO_FIRECRAWL_FALLBACK_FAILED platform={p}; error={type(exc).__name__}: {exc}")
+    elif len(ranked_by_url) < MAX_ITEMS and not COMPOSIO_API_KEY:
+        print(f"COMPOSIO_FIRECRAWL_FALLBACK_SKIPPED platform={p}; reason=COMPOSIO_API_KEY_missing")
+
     ranked = sorted(ranked_by_url.values(), key=lambda item: item[0], reverse=True)
     personal_ranked = sorted(personal_by_url.values(), key=lambda item: item[0], reverse=True)
     selected = ranked[:MAX_ITEMS]
