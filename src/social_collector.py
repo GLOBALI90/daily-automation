@@ -67,7 +67,7 @@ COMPOSIO_PRIMARY_RESULTS = {"linkedin": [], "facebook": []}
 COMPOSIO_AUDIT = []
 COMPOSIO_CALLS_THIS_RUN = 0
 MAX_COMPOSIO_CALLS_PER_RUN = 2
-COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
+COMPOSIO_API_KEY = ""  # Disabled: connected Firecrawl account exhausted its credits.
 FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "").strip()
 COLLECTION_MODE = os.getenv("COLLECTION_MODE", "social").strip().lower()
 PRODUCT_LEADS = DATA / "product_leads.csv"
@@ -82,8 +82,8 @@ MAX_FIRECRAWL_SEARCHES_PER_RUN = 1
 FIRECRAWL_SCRAPES_THIS_RUN = 0
 MAX_FIRECRAWL_SCRAPES_PER_RUN = 1
 GITHUB_RUN_NUMBER = int(os.getenv("GITHUB_RUN_NUMBER", "0") or "0")
-COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID = os.getenv("COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID", "").strip()
-COMPOSIO_USER_ID = os.getenv("COMPOSIO_USER_ID", "GLOBALI90").strip()
+COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID = ""  # Disabled with Composio Firecrawl fallback.
+COMPOSIO_USER_ID = ""  # Disabled with Composio Firecrawl fallback.
 CLOUDFLARE_PRIMARY_ENRICHMENT = os.getenv("CLOUDFLARE_PRIMARY_ENRICHMENT", "false").strip().lower() in ("1", "true", "yes", "on")
 COMPOSIO_EXECUTE_URL = "https://backend.composio.dev/api/v3.1/tools/execute/FIRECRAWL_SEARCH"
 CLOUDFLARE_PRIMARY_QUERY = (
@@ -1080,16 +1080,11 @@ def native_candidates(platform, query):
     if platform == "linkedin":
         out = []
         seen = set()
-        # First use LinkedIn-specific public post search, then LinkedIn company search.
-        if SCRAPECREATORS:
-            try:
-                out.extend(_linkedin_provider_candidates(query))
-            except Exception as exc:
-                DISCOVERY_ERRORS.append({
-                    "platform": "linkedin", "provider": "ScrapeCreators",
-                    "error_type": type(exc).__name__, "error": str(exc)[:500],
-                })
-                print(f"ScrapeCreators LinkedIn native search failed: {type(exc).__name__}: {exc}")
+        # ScrapeCreators' LinkedIn discovery endpoint returned HTTP 404 in
+        # repeated live runs. Disable only its LinkedIn SEARCH adapter until
+        # a replacement is configured; keep ScrapeCreators profile enrichment
+        # enabled for Facebook and provider-returned LinkedIn profile URLs.
+        print("LINKEDIN_SEARCH_PROVIDER_DISABLED provider=ScrapeCreators; reason=repeated_http_404; active_search=Apify_only")
         if APIFY:
             try:
                 for item in _apify_linkedin_company_candidates(query):
@@ -1534,33 +1529,8 @@ def discover(p):
             if current is None or score > current[0]:
                 target[url] = candidate
 
-    # Native provider results are free-first. Only use one Composio search for this
-    # platform when native discovery did not fill the company-lead cap.
-    if len(ranked_by_url) < MAX_ITEMS and COMPOSIO_API_KEY:
-        try:
-            fallback_results = composio_search_candidates(p, " ".join(NATIVE_QUERIES[p]))
-            for item in fallback_results:
-                url = val(item.get("url")).rstrip("/")
-                if not url or not good(p, url) or is_existing_candidate(p, url):
-                    if url and is_existing_candidate(p, url):
-                        DUPLICATE_PREFILTER_SKIPPED += 1
-                    continue
-                SOCIAL_DISCOVERY_RESULTS[(p, url.rstrip("/"))] = item
-                score = social_candidate_score(p, item, url)
-                if not score:
-                    continue
-                target = personal_by_url if p == "linkedin" and urlparse(url).path.lower().startswith("/in/") else ranked_by_url
-                current = target.get(url)
-                candidate = (score, url, "Composio fallback: " + " ".join(NATIVE_QUERIES[p]), "composio_firecrawl_fallback")
-                if current is None or score > current[0]:
-                    target[url] = candidate
-        except Exception as exc:
-            DISCOVERY_ERRORS.append({
-                "platform": p, "provider": "Composio Firecrawl",
-                "error_type": type(exc).__name__, "error": str(exc)[:500],
-            })
-            print(f"COMPOSIO_FALLBACK_FAILED platform={p}; error={type(exc).__name__}: {exc}")
-
+    # Composio Firecrawl fallback is disabled: its account has insufficient
+    # credits. Do not call it again until a funded replacement is configured.
     ranked = sorted(ranked_by_url.values(), key=lambda item: item[0], reverse=True)
     personal_ranked = sorted(personal_by_url.values(), key=lambda item: item[0], reverse=True)
     selected = ranked[:MAX_ITEMS]
