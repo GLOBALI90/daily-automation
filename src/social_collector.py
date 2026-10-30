@@ -98,6 +98,9 @@ PLATFORM = os.getenv("SOCIAL_PLATFORM", "auto").strip().lower().lstrip(chr(92) +
 APIFY = os.getenv("APIFY_API_TOKEN", "").strip()
 APIFY_LINKEDIN_SEARCH_CALLS_THIS_RUN = 0
 MAX_APIFY_LINKEDIN_SEARCH_CALLS_PER_RUN = 2
+APIFY_FACEBOOK_PAGE_CALLS_THIS_RUN = 0
+MAX_APIFY_FACEBOOK_PAGE_CALLS_PER_RUN = 2
+MAX_APIFY_FACEBOOK_PAGE_CHARGE_USD = 0.025
 SCRAPECREATORS = os.getenv("SCRAPECREATORS_API_KEY", "").strip()
 # Legacy Brave adapter is disabled in the workflow; kept only for compatibility tests.
 BRAVE_SEARCH_API_KEY = ""
@@ -1825,7 +1828,15 @@ def apify_profile(p, url):
             "urls": [canonical_linkedin_url(url)]
         })
     if p == "facebook":
-        return actor(p, {"startUrls": [{"url": url}]})
+        global APIFY_FACEBOOK_PAGE_CALLS_THIS_RUN
+        if APIFY_FACEBOOK_PAGE_CALLS_THIS_RUN >= MAX_APIFY_FACEBOOK_PAGE_CALLS_PER_RUN:
+            raise RuntimeError("apify_facebook_page_per_run_cap_reached")
+        # One known public Page URL per call; keep total actor spend bounded.
+        APIFY_FACEBOOK_PAGE_CALLS_THIS_RUN += 1
+        return actor(p, {
+            "startUrls": [{"url": url}],
+            "maxTotalChargeUsd": MAX_APIFY_FACEBOOK_PAGE_CHARGE_USD,
+        })
     return actor(p, {
         "startUrls": [url],
         "maxItems": 1,
@@ -1900,6 +1911,10 @@ def provider_chain(p, url):
         providers.append(("ScrapeCreators", lambda: scrapecreators_profile(p, url)))
     if p == "linkedin" and APIFY:
         providers.append(("Apify", lambda: apify_profile(p, url)))
+    if p == "facebook" and APIFY:
+        # Secondary enrichment only: invoked when ScrapeCreators fails or
+        # returns an unusable public Page response.
+        providers.append(("ApifyFacebookPages", lambda: apify_profile(p, url)))
     if not providers:
         errors.append("no_profile_provider_available_or_worker_cap_reached")
 
@@ -2349,6 +2364,9 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "composio_calls_used": COMPOSIO_CALLS_THIS_RUN,
         "youcom_searches_used": YOUCOM_SEARCHES_THIS_RUN,
         "youcom_search_cap": MAX_YOUCOM_SEARCHES_PER_RUN,
+        "apify_facebook_page_calls": APIFY_FACEBOOK_PAGE_CALLS_THIS_RUN,
+        "apify_facebook_page_call_cap": MAX_APIFY_FACEBOOK_PAGE_CALLS_PER_RUN,
+        "apify_facebook_page_max_charge_usd": MAX_APIFY_FACEBOOK_PAGE_CHARGE_USD,
         "youcom_audit": YOUCOM_AUDIT,
         "composio_call_cap": MAX_COMPOSIO_CALLS_PER_RUN,
         "generic_web_search_enabled": False,
@@ -2368,6 +2386,7 @@ def write_run_report(platforms, discovered, added, provider_counts, outcome):
         "notes": [
             "Public LinkedIn company pages, qualifying public LinkedIn personal profiles, and public Facebook pages only.",
             "Platform-specific LinkedIn/Facebook providers run first; You.com free MCP is a maximum-two-search last-resort fallback pinned to the relevant social domain.",
+            "Facebook Page enrichment uses Apify only after ScrapeCreators failure/unusable output; max 2 calls per workflow run, maxTotalChargeUsd $0.025 per actor run.",
             "country remains the legacy target-market label for downstream compatibility; target_market and company_location separately expose target and observed location.",
             "market_match_status and product_match_status are evidence labels; needs_review means the public profile did not prove the match.",
             "HTTP success does not guarantee usable public profile fields.",
