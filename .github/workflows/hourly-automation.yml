@@ -437,6 +437,7 @@ jobs:
           COLLECTION_MODE: ${{ inputs.collection_mode || 'social' }}
           APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
           SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
           COMPOSIO_API_KEY: ${{ secrets.COMPOSIO_API_KEY }}
           COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID: ${{ vars.COMPOSIO_FIRECRAWL_CONNECTED_ACCOUNT_ID }}
           COMPOSIO_USER_ID: ${{ vars.COMPOSIO_USER_ID }}
