@@ -108,6 +108,9 @@ BRAVE_SEARCH_API_KEY = ""
 EXA_API_KEY = os.getenv("EXA_API_KEY", "").strip()
 EXA_USAGE_FILE = DATA / "exa_search_usage.json"
 EXA_MAX_MONTHLY_CALLS = 20
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip()
+TAVILY_SEARCHES_THIS_RUN = 0
+MAX_TAVILY_SEARCHES_PER_RUN = 2
 
 CLOUDFLARE_URL = os.getenv(
     "SOCIAL_DEEP_BACKUP_URL",
@@ -1706,6 +1709,74 @@ def youcom_social_candidates(platform, query):
     return candidates
 
 
+def tavily_social_candidates(platform, query):
+    """Find public LinkedIn company pages or Facebook pages from Tavily's indexed web search."""
+    global TAVILY_SEARCHES_THIS_RUN
+    if not TAVILY_API_KEY or platform not in ("linkedin", "facebook"):
+        return []
+    if TAVILY_SEARCHES_THIS_RUN >= MAX_TAVILY_SEARCHES_PER_RUN:
+        print(
+            f"TAVILY_SOCIAL_SEARCH blocked: per_run_cap={MAX_TAVILY_SEARCHES_PER_RUN}"
+        )
+        return []
+
+    allowed_domain = "linkedin.com" if platform == "linkedin" else "facebook.com"
+    product_terms = ", ".join(PRODUCT_SEARCH_PHRASES[:5]) if PRODUCT_SEARCH_PHRASES else PRODUCT_NAME
+    search_query = (
+        f'Find real {TARGET_MARKET}-based companies relevant to "{PRODUCT_NAME}". '
+        f'Prioritize {BUYER_TYPES}. Product terms: {product_terms}. '
+        f'Find official public {platform} company/page URLs and evidence of importing, '
+        'distribution, wholesale, procurement, or relevant end use. Exclude directories and news.'
+    )
+    TAVILY_SEARCHES_THIS_RUN += 1
+    response = session.post(
+        "https://api.tavily.com/search",
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        json={
+            "api_key": TAVILY_API_KEY,
+            "query": search_query,
+            "search_depth": "basic",
+            "topic": "general",
+            "max_results": 5,
+            "include_domains": [allowed_domain],
+            "include_answer": False,
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    out = []
+    seen = set()
+    for item in payload.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        url = val(item.get("url")).split("#", 1)[0].rstrip("/")
+        if not url or not good(platform, url) or url in seen:
+            continue
+        path = urlparse(url).path.lower()
+        if platform == "linkedin" and not path.startswith("/company/"):
+            continue
+        if platform == "facebook" and any(part in path for part in (
+            "/posts/", "/photos/", "/videos/", "/reel/", "/reels/",
+            "/watch", "/groups/", "/events/", "/marketplace/",
+            "/story.php", "/permalink.php", "/login"
+        )):
+            continue
+        seen.add(url)
+        out.append({
+            "url": url,
+            "title": val(item.get("title")),
+            "content": val(item.get("content")),
+            "search_provider": "Tavily Search API",
+            "discovery_method": "tavily_social_domain_search",
+        })
+    print(
+        f"TAVILY_SOCIAL_SEARCH platform={platform}; candidates={len(out)}; "
+        f"calls={TAVILY_SEARCHES_THIS_RUN}/{MAX_TAVILY_SEARCHES_PER_RUN}"
+    )
+    return out
+
+
 def discover(p):
     """Discover candidates exclusively through LinkedIn/Facebook-specific providers."""
     global DUPLICATE_PREFILTER_SKIPPED
@@ -1785,6 +1856,35 @@ def discover(p):
                 "error_type": type(exc).__name__, "error": str(exc)[:500],
             })
             print(f"YOUCOM_SOCIAL_FALLBACK_FAILED platform={p}; {type(exc).__name__}: {exc}")
+
+    # Tavily is a bounded last-resort URL discovery provider. It searches only
+    # public pages on the selected social platform and never enriches/sends by itself.
+    if not ranked_by_url and not personal_by_url and TAVILY_API_KEY:
+        try:
+            tavily_items = tavily_social_candidates(p, fallback_query)
+            for item in tavily_items:
+                url = val(item.get("url")).rstrip("/")
+                if not url or not good(p, url):
+                    continue
+                if is_existing_candidate(p, url):
+                    DUPLICATE_PREFILTER_SKIPPED += 1
+                    print(f"Skipping previously stored Tavily candidate: platform={p}; url={url}")
+                    continue
+                SOCIAL_DISCOVERY_RESULTS[(p, url.rstrip("/"))] = item
+                score = social_candidate_score(p, item, url)
+                if not score:
+                    continue
+                target = ranked_by_url
+                candidate = (score, url, fallback_query, "tavily_social_domain_search")
+                current = target.get(url)
+                if current is None or score > current[0]:
+                    target[url] = candidate
+        except Exception as exc:
+            DISCOVERY_ERRORS.append({
+                "platform": p, "provider": "Tavily",
+                "error_type": type(exc).__name__, "error": str(exc)[:500],
+            })
+            print(f"TAVILY_SOCIAL_FALLBACK_FAILED platform={p}; {type(exc).__name__}: {exc}")
 
     ranked = sorted(ranked_by_url.values(), key=lambda item: item[0], reverse=True)
     personal_ranked = sorted(personal_by_url.values(), key=lambda item: item[0], reverse=True)
