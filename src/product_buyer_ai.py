@@ -71,11 +71,13 @@ Rules:
 - JSON only; no markdown fences or explanations.
 """
 
+    stage = "client_init"
     try:
         client = genai.Client(
             api_key=api_key,
             http_options=types.HttpOptions(timeout=20_000),
         )
+        stage = "model_request"
         response = client.models.generate_content(
             model=model,
             contents=prompt,
@@ -84,11 +86,14 @@ Rules:
                 max_output_tokens=700,
             ),
         )
+        stage = "read_model_response"
         raw = (response.text or "").strip()
         start, end = raw.find("{"), raw.rfind("}")
         if start < 0 or end <= start:
             raise ValueError("model_response_not_json")
+        stage = "parse_model_json"
         payload = json.loads(raw[start:end + 1])
+        stage = "validate_buyer_terms"
         company_types = _clean_list(payload.get("company_types"), MAX_COMPANY_TYPES)
         search_keywords = _clean_list(payload.get("search_keywords"), MAX_SEARCH_KEYWORDS)
         if len(company_types) < 3 or len(search_keywords) < 4:
@@ -100,9 +105,14 @@ Rules:
         }
     except Exception as exc:
         # One attempt only: do not spend extra quota on retries or model fallbacks.
+        # Log a short, single-line diagnostic; never log the API key or raw response.
+        error_message = " ".join(str(exc).split())[:240]
+        if api_key:
+            error_message = error_message.replace(api_key, "[REDACTED]")
         print(
             "BUYER_AI_UNAVAILABLE "
-            f"model={model}; error={type(exc).__name__}; "
+            f"model={model}; stage={stage}; error={type(exc).__name__}; "
+            f"detail={error_message or 'no_error_detail'}; "
             "fallback=existing_product_rules"
         )
         return None
