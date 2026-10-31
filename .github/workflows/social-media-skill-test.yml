@@ -1,0 +1,91 @@
+name: Social Media Skill - Manual Sample Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Choose the public profile/page type to test"
+        required: true
+        type: choice
+        options:
+          - linkedin_company
+          - linkedin_profile
+          - facebook_page
+        default: linkedin_company
+      profile_url:
+        description: "Full public LinkedIn company/profile or Facebook page URL"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: social-media-skill-sample
+  cancel-in-progress: false
+
+jobs:
+  sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify skill file and API key
+        env:
+          SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
+        run: |
+          test -s .claude/skills/social-media-research/SKILL.md
+          if [ -z "$SCRAPECREATORS_API_KEY" ]; then
+            echo "::error::Missing repository secret SCRAPECREATORS_API_KEY"
+            exit 1
+          fi
+          echo "Skill file found and API key is configured."
+
+      - name: Fetch one public sample
+        env:
+          SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
+          PLATFORM: ${{ inputs.platform }}
+          PROFILE_URL: ${{ inputs.profile_url }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.parse, urllib.request
+          platform = os.environ["PLATFORM"]
+          url = os.environ["PROFILE_URL"].strip()
+          parsed = urllib.parse.urlparse(url)
+          if parsed.scheme != "https" or not parsed.netloc:
+              raise SystemExit("Provide a valid public HTTPS profile/page URL.")
+          allowed = {
+              "linkedin_company": ("linkedin.com", "/v1/linkedin/company"),
+              "linkedin_profile": ("linkedin.com", "/v1/linkedin/profile"),
+              "facebook_page": ("facebook.com", "/v1/facebook/profile"),
+          }
+          domain, endpoint = allowed[platform]
+          if domain not in parsed.netloc.lower():
+              raise SystemExit(f"The selected platform requires a public {domain} URL.")
+          query = urllib.parse.urlencode({"url": url})
+          request = urllib.request.Request(
+              "https://api.scrapecreators.com" + endpoint + "?" + query,
+              headers={"x-api-key": os.environ["SCRAPECREATORS_API_KEY"], "Accept": "application/json"},
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=45) as response:
+                  payload = response.read()
+                  data = json.loads(payload)
+                  with open("social-sample-result.json", "w", encoding="utf-8") as f:
+                      json.dump(data, f, ensure_ascii=False, indent=2)
+                  print(f"HTTP {response.status}; response saved as workflow artifact.")
+                  print("Top-level response fields:", ", ".join(data.keys()) if isinstance(data, dict) else type(data).__name__)
+          except Exception as exc:
+              raise SystemExit(f"Sample request failed: {type(exc).__name__}: {exc}")
+          PY
+
+      - name: Upload sample response
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: social-media-skill-sample-${{ github.run_id }}
+          path: social-sample-result.json
+          if-no-files-found: ignore
+          retention-days: 3
